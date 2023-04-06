@@ -1,4 +1,5 @@
-use std::ffi;
+use std::ptr::copy_nonoverlapping as memcpy;
+use std::{ffi, mem::size_of_val};
 
 use ash::{vk, Entry, Instance};
 use winit::{dpi::PhysicalSize, window::WindowBuilder};
@@ -278,6 +279,7 @@ fn fill_commandbuffers(
     renderpass: &vk::RenderPass,
     swapchain: &Swapchain,
     pipeline: &Pipeline,
+    vertex_buffer: &vk::Buffer,
 ) -> Result<(), vk::Result> {
     for (i, &commandbuffer) in commandbuffers.iter().enumerate() {
         let commandbuffer_begin_info = vk::CommandBufferBeginInfo::builder();
@@ -286,7 +288,7 @@ fn fill_commandbuffers(
         }
         let clearvalues = [vk::ClearValue {
             color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 1.0],
+                float32: [0.2, 0.2, 0.2, 1.0],
             },
         }];
         let renderpass_being_info = vk::RenderPassBeginInfo::builder()
@@ -308,12 +310,71 @@ fn fill_commandbuffers(
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline.pipeline,
             );
+            logical_device.cmd_bind_vertex_buffers(commandbuffer, 0, &[*vertex_buffer], &[0]);
             logical_device.cmd_draw(commandbuffer, 1, 1, 0, 0);
             logical_device.cmd_end_render_pass(commandbuffer);
             logical_device.end_command_buffer(commandbuffer)?;
         }
     }
     Ok(())
+}
+
+fn create_vertex_buffer(
+    instance: &Instance,
+    logical_device: &ash::Device,
+    physical_device: &vk::PhysicalDevice,
+    data: &[f32; 4],
+) -> Result<(vk::Buffer, vk::DeviceMemory), vk::Result> {
+    let buffer_info = vk::BufferCreateInfo::builder()
+        .size(size_of_val(data) as u64)
+        .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let vertex_buffer = unsafe { logical_device.create_buffer(&buffer_info, None) }?;
+
+    let requirements = unsafe { logical_device.get_buffer_memory_requirements(vertex_buffer) };
+    let memory_info = vk::MemoryAllocateInfo::builder()
+        .allocation_size(requirements.size)
+        .memory_type_index(get_memory_type_index(
+            &instance,
+            &physical_device,
+            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
+            requirements,
+        )?);
+
+    let vertex_buffer_memory = unsafe { logical_device.allocate_memory(&memory_info, None)? };
+    unsafe { logical_device.bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)? };
+
+    let memory = unsafe {
+        logical_device.map_memory(
+            vertex_buffer_memory,
+            0,
+            buffer_info.size,
+            vk::MemoryMapFlags::empty(),
+        )
+    }?;
+
+    unsafe {
+        memcpy(data.as_ptr(), memory.cast(), data.len());
+        logical_device.unmap_memory(vertex_buffer_memory);
+    };
+
+    Ok((vertex_buffer, vertex_buffer_memory))
+}
+
+fn get_memory_type_index(
+    instance: &Instance,
+    physical_device: &vk::PhysicalDevice,
+    properties: vk::MemoryPropertyFlags,
+    requirements: vk::MemoryRequirements,
+) -> Result<u32, vk::Result> {
+    let memory = unsafe { instance.get_physical_device_memory_properties(*physical_device) };
+    Ok((0..memory.memory_type_count)
+        .find(|i| {
+            let suitable = (requirements.memory_type_bits & (1 << i)) != 0;
+            let memory_type = memory.memory_types[*i as usize];
+            suitable && memory_type.property_flags.contains(properties)
+        })
+        .expect("Failed to find suitable memory type"))
 }
 
 struct Debug {
@@ -648,7 +709,22 @@ impl Pipeline {
             .name(&main_function_name);
         let shader_stages = vec![vertex_shader_stage.build(), fragment_shader_stage.build()];
 
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder();
+        let vertex_attribute_descriptions = [vk::VertexInputAttributeDescription {
+            binding: 0,
+            location: 0,
+            offset: 0,
+            format: vk::Format::R32G32B32A32_SFLOAT,
+        }];
+
+        let vertex_binding_descriptions = [vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: 16,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }];
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_attribute_descriptions(&vertex_attribute_descriptions)
+            .vertex_binding_descriptions(&vertex_binding_descriptions);
         let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(vk::PrimitiveTopology::POINT_LIST);
 
@@ -772,7 +848,10 @@ struct Vulkano {
     swapchain: Swapchain,
     renderpass: vk::RenderPass,
     pipeline: Pipeline,
+    pools: Pools,
     commandbuffers: Vec<vk::CommandBuffer>,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
 }
 
 impl Vulkano {
@@ -808,6 +887,11 @@ impl Vulkano {
 
         let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
         let pools = Pools::init(&logical_device, &queue_families)?;
+
+        let data: [f32; 4] = [-0.5, 0.0, 0.0, 1.0];
+        let (vertex_buffer, vertex_buffer_memory) =
+            create_vertex_buffer(&instance, &logical_device, &physical_device, &data)?;
+
         let commandbuffers =
             create_commandbuffers(&logical_device, &pools, swapchain.framebuffers.len())?;
         fill_commandbuffers(
@@ -816,6 +900,7 @@ impl Vulkano {
             &renderpass,
             &swapchain,
             &pipeline,
+            &vertex_buffer
         )?;
 
         Ok(Vulkano {
@@ -832,7 +917,10 @@ impl Vulkano {
             swapchain,
             renderpass,
             pipeline,
+            pools,
             commandbuffers,
+            vertex_buffer,
+            vertex_buffer_memory,
         })
     }
 }
@@ -843,6 +931,9 @@ impl Drop for Vulkano {
             self.device
                 .device_wait_idle()
                 .expect("Something went wrong while waiting");
+            self.device.free_memory(self.vertex_buffer_memory, None);
+            self.device.destroy_buffer(self.vertex_buffer, None);
+            self.pools.cleanup(&self.device);
             self.pipeline.cleanup(&self.device);
             self.device.destroy_render_pass(self.renderpass, None);
             self.swapchain.cleanup(&self.device);
