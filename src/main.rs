@@ -154,19 +154,24 @@ fn init_instance(entry: &Entry, layer_names: &[&str]) -> Result<Instance, vk::Re
 
 fn init_physical_device_and_properties(
     instance: &Instance,
-) -> Result<(vk::PhysicalDevice, vk::PhysicalDeviceProperties), vk::Result> {
+) -> Result<
+    (
+        vk::PhysicalDevice,
+        vk::PhysicalDeviceProperties,
+        vk::PhysicalDeviceFeatures,
+    ),
+    vk::Result,
+> {
     let physical_devices = unsafe { instance.enumerate_physical_devices()? };
-    let (physical_device, physical_device_properties) = {
-        let mut chosen = None;
-        for device in physical_devices {
-            let properties = unsafe { instance.get_physical_device_properties(device) };
-            if properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
-                chosen = Some((device, properties));
-            }
+    let mut chosen = None;
+    for device in physical_devices {
+        let properties = unsafe { instance.get_physical_device_properties(device) };
+        let features = unsafe { instance.get_physical_device_features(device) };
+        if properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
+            chosen = Some((device, properties, features));
         }
-        chosen.unwrap()
-    };
-    Ok((physical_device, physical_device_properties))
+    }
+    Ok(chosen.unwrap())
 }
 
 struct Queues {
@@ -200,13 +205,15 @@ fn init_device_and_queues(
             .queue_priorities(&priorities)
             .build(),
     ];
+    let features = vk::PhysicalDeviceFeatures::builder().fill_mode_non_solid(true);
 
     let device_extension_name_pointers: Vec<*const i8> =
         vec![ash::extensions::khr::Swapchain::name().as_ptr()];
     let device_create_info = vk::DeviceCreateInfo::builder()
         .queue_create_infos(&queue_infos)
         .enabled_extension_names(&device_extension_name_pointers)
-        .enabled_layer_names(&layer_name_pointers);
+        .enabled_layer_names(&layer_name_pointers)
+        .enabled_features(&features);
     let logical_device =
         unsafe { instance.create_device(physical_device, &device_create_info, None)? };
     let graphics_queue =
@@ -691,7 +698,7 @@ impl Pipeline {
             .vertex_attribute_descriptions(&vertex_attribute_descriptions)
             .vertex_binding_descriptions(&vertex_binding_descriptions);
         let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(vk::PrimitiveTopology::POINT_LIST);
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 
         let viewports = [vk::Viewport {
             x: 0.0,
@@ -958,6 +965,7 @@ struct Vulkano {
     surfaces: std::mem::ManuallyDrop<Surface>,
     physical_device: vk::PhysicalDevice,
     physical_device_properties: vk::PhysicalDeviceProperties,
+    physical_device_features: vk::PhysicalDeviceFeatures,
     queue_families: QueueFamilies,
     queues: Queues,
     device: ash::Device,
@@ -978,7 +986,7 @@ impl Vulkano {
         let debug = Debug::init(&entry, &instance)?;
         let surfaces = Surface::init(&window, &entry, &instance)?;
 
-        let (physical_device, physical_device_properties) =
+        let (physical_device, physical_device_properties, physical_device_features) =
             init_physical_device_and_properties(&instance)?;
 
         let queue_families = QueueFamilies::init(&instance, physical_device, &surfaces)?;
@@ -1004,12 +1012,9 @@ impl Vulkano {
         let pools = Pools::init(&logical_device, &queue_families)?;
 
         let data_1 = [
-            -0.9f32, -0.9, 0.0, 1.0,
-            -0.5, -0.5, 0.0, 1.0,
-            0.0, 0.0, 0.0, 1.0,
-            0.25,0.25,0.0,1.0,
-            0.5,0.5,0.0,1.0,
-            0.9,0.9,0.0,1.0,
+            0.5f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.2f32, 0.0f32, 1.0f32, -0.5f32, 0.0f32,
+            0.0f32, 1.0f32, -0.9f32, -0.9f32, 0.0f32, 1.0f32, 0.3f32, -0.8f32, 0.0f32, 1.0f32,
+            0.0f32, -0.6f32, 0.0f32, 1.0f32,
         ];
         let buffer_1 = unsafe {
             create_vertex_buffer(
@@ -1023,12 +1028,9 @@ impl Vulkano {
         }?;
 
         let data_2 = [
-            10.0f32, 0.0,0.0,1.0,1.0,
-            10.0, 0.0,0.0,1.0,1.0,
-            10.0, 0.0,1.0,0.0,1.0,
-            10.0, 0.0,1.0,0.0,1.0,
-            10.0, 1.0,0.0,0.0,1.0,
-            10.0, 1.0,0.0,0.0,1.0,
+            15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32,
+            15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32,
+            1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32, 1.0f32, 0.0f32, 0.0f32, 1.0f32, 1.0f32,
         ];
         let buffer_2 = unsafe {
             create_vertex_buffer(
@@ -1061,6 +1063,7 @@ impl Vulkano {
             surfaces: std::mem::ManuallyDrop::new(surfaces),
             physical_device,
             physical_device_properties,
+            physical_device_features,
             queue_families,
             queues,
             device: logical_device,
@@ -1069,7 +1072,7 @@ impl Vulkano {
             pipeline,
             pools,
             commandbuffers,
-            buffers: vec![buffer_1],
+            buffers: vec![buffer_1, buffer_2],
         })
     }
 }
