@@ -806,156 +806,73 @@ impl Pools {
     }
 }
 
-unsafe fn create_buffer(
-    instance: &Instance,
-    logical_device: &ash::Device,
-    physical_device: &vk::PhysicalDevice,
-    size: u64,
-    usage: vk::BufferUsageFlags,
-    properties: vk::MemoryPropertyFlags,
-) -> Result<(vk::Buffer, vk::DeviceMemory), vk::Result> {
-    let buffer_info = vk::BufferCreateInfo::builder()
-        .size(size)
-        .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let buffer = logical_device.create_buffer(&buffer_info, None)?;
-
-    let requirements = logical_device.get_buffer_memory_requirements(buffer);
-
-    let memory_info = vk::MemoryAllocateInfo::builder()
-        .allocation_size(requirements.size)
-        .memory_type_index(get_memory_type_index(
-            &instance,
-            &physical_device,
-            properties,
-            requirements,
-        )?);
-
-    let buffer_memory = logical_device.allocate_memory(&memory_info, None)?;
-
-    logical_device.bind_buffer_memory(buffer, buffer_memory, 0)?;
-
-    Ok((buffer, buffer_memory))
+struct Buffer {
+    buffer: vk::Buffer,
+    allocation: gpu_allocator::vulkan::Allocation,
 }
 
-unsafe fn create_vertex_buffer<T: Sized>(
-    instance: &Instance,
-    logical_device: &ash::Device,
-    physical_device: &vk::PhysicalDevice,
-    data: &[T],
-    pools: &Pools,
-    queues: &Queues,
-) -> Result<(vk::Buffer, vk::DeviceMemory), vk::Result> {
-    let size = size_of_val(data) as u64;
+impl Buffer {
+    fn new(
+        logical_device: &ash::Device,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+        size: u64,
+    ) -> Buffer {
+        let buffer_create_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
-        &instance,
-        &logical_device,
-        &physical_device,
-        size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-    )?;
+        let buffer = unsafe {
+            logical_device
+                .create_buffer(&buffer_create_info, None)
+                .expect("Failed to create buffer")
+        };
 
-    let memory =
-        logical_device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
+        let memory_requirements = unsafe { logical_device.get_buffer_memory_requirements(buffer) };
+        let location = gpu_allocator::MemoryLocation::CpuToGpu;
 
-    memcpy(data.as_ptr(), memory.cast(), data.len());
-    logical_device.unmap_memory(staging_buffer_memory);
+        let allocation_create_info = gpu_allocator::vulkan::AllocationCreateDesc {
+            requirements: memory_requirements,
+            location,
+            linear: true,
+            name: "Buffer",
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
+        };
 
-    let (vertex_buffer, vertex_buffer_memory) = create_buffer(
-        &instance,
-        &logical_device,
-        &physical_device,
-        size,
-        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
+        let allocation = allocator
+            .allocate(&allocation_create_info)
+            .expect("Failed to allocate memory for buffer");
 
-    copy_buffer(
-        &logical_device,
-        &pools,
-        &queues,
-        staging_buffer,
-        vertex_buffer,
-        size,
-    )?;
+        unsafe {
+            logical_device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                .expect("Failed to bind buffer");
+        };
 
-    logical_device.destroy_buffer(staging_buffer, None);
-    logical_device.free_memory(staging_buffer_memory, None);
+        Buffer { buffer, allocation }
+    }
 
-    Ok((vertex_buffer, vertex_buffer_memory))
+    fn fill(&mut self, data: &[f32]) {
+        let destination = self.allocation.mapped_ptr().unwrap().cast().as_ptr();
+        unsafe {
+            memcpy::<f32>(data.as_ptr(), destination, data.len());
+        };
+    }
+
+    fn cleanup(
+        &mut self,
+        logical_device: &ash::Device,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+    ) {
+        unsafe {
+            logical_device.destroy_buffer(self.buffer, None);
+        }
+        allocator
+            .free(std::mem::take(&mut self.allocation))
+            .expect("Failed to free buffer memory");
+    }
 }
 
-fn get_memory_type_index(
-    instance: &Instance,
-    physical_device: &vk::PhysicalDevice,
-    properties: vk::MemoryPropertyFlags,
-    requirements: vk::MemoryRequirements,
-) -> Result<u32, vk::Result> {
-    let memory = unsafe { instance.get_physical_device_memory_properties(*physical_device) };
-    Ok((0..memory.memory_type_count)
-        .find(|i| {
-            let suitable = (requirements.memory_type_bits & (1 << i)) != 0;
-            let memory_type = memory.memory_types[*i as usize];
-            suitable && memory_type.property_flags.contains(properties)
-        })
-        .expect("Failed to find suitable memory type"))
-}
-
-unsafe fn copy_buffer(
-    logical_device: &ash::Device,
-    pools: &Pools,
-    queues: &Queues,
-    source: vk::Buffer,
-    destination: vk::Buffer,
-    size: vk::DeviceSize,
-) -> Result<(), vk::Result> {
-    let command_buffer = begin_single_time_commands(&logical_device, &pools)?;
-
-    let regions = vk::BufferCopy::builder().size(size);
-    logical_device.cmd_copy_buffer(command_buffer, source, destination, &[*regions]);
-
-    end_single_time_commands(&logical_device, &queues, &pools, command_buffer)?;
-
-    Ok(())
-}
-
-unsafe fn begin_single_time_commands(
-    logical_device: &ash::Device,
-    pools: &Pools,
-) -> Result<vk::CommandBuffer, vk::Result> {
-    let info = vk::CommandBufferAllocateInfo::builder()
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_pool(pools.command_pool_graphics)
-        .command_buffer_count(1);
-    let command_buffer = logical_device.allocate_command_buffers(&info)?[0];
-
-    let info =
-        vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-    logical_device.begin_command_buffer(command_buffer, &info)?;
-    Ok(command_buffer)
-}
-
-unsafe fn end_single_time_commands(
-    logical_device: &ash::Device,
-    queues: &Queues,
-    pools: &Pools,
-    command_buffer: vk::CommandBuffer,
-) -> Result<(), vk::Result> {
-    logical_device.end_command_buffer(command_buffer)?;
-
-    let command_buffers = &[command_buffer];
-
-    let info = vk::SubmitInfo::builder().command_buffers(command_buffers);
-
-    logical_device.queue_submit(queues.graphics_queue, &[*info], vk::Fence::null())?;
-    logical_device.queue_wait_idle(queues.graphics_queue)?;
-
-    logical_device.free_command_buffers(pools.command_pool_graphics, command_buffers);
-    Ok(())
-}
 
 struct Vulkano {
     window: winit::window::Window,
@@ -974,7 +891,8 @@ struct Vulkano {
     pipeline: Pipeline,
     pools: Pools,
     commandbuffers: Vec<vk::CommandBuffer>,
-    buffers: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    buffers: Vec<Buffer>,
+    allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>
 }
 
 impl Vulkano {
@@ -1011,37 +929,32 @@ impl Vulkano {
         let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
         let pools = Pools::init(&logical_device, &queue_families)?;
 
+        let mut allocator_create_description = gpu_allocator::vulkan::AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: logical_device.clone(),
+            physical_device,
+            debug_settings: Default::default(),
+            buffer_device_address: false,
+        };
+
+        let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_description)
+            .expect("Failed to create allocator");
+
         let data_1 = [
             0.5f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.2f32, 0.0f32, 1.0f32, -0.5f32, 0.0f32,
             0.0f32, 1.0f32, -0.9f32, -0.9f32, 0.0f32, 1.0f32, 0.3f32, -0.8f32, 0.0f32, 1.0f32,
             0.0f32, -0.6f32, 0.0f32, 1.0f32,
         ];
-        let buffer_1 = unsafe {
-            create_vertex_buffer(
-                &instance,
-                &logical_device,
-                &physical_device,
-                &data_1,
-                &pools,
-                &queues,
-            )
-        }?;
+        let mut buffer_1 = Buffer::new(&logical_device, &mut allocator, size_of_val(&data_1) as u64);
+        buffer_1.fill(&data_1);
 
         let data_2 = [
             15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32,
             15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32,
             1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32, 1.0f32, 0.0f32, 0.0f32, 1.0f32, 1.0f32,
         ];
-        let buffer_2 = unsafe {
-            create_vertex_buffer(
-                &instance,
-                &logical_device,
-                &physical_device,
-                &data_2,
-                &pools,
-                &queues,
-            )
-        }?;
+        let mut buffer_2 = Buffer::new(&logical_device, &mut allocator, size_of_val(&data_2) as u64);
+        buffer_2.fill(&data_2);
 
         let commandbuffers =
             create_commandbuffers(&logical_device, &pools, swapchain.framebuffers.len())?;
@@ -1051,8 +964,8 @@ impl Vulkano {
             &renderpass,
             &swapchain,
             &pipeline,
-            &buffer_1.0,
-            &buffer_2.0,
+            &buffer_1.buffer,
+            &buffer_2.buffer,
         )?;
 
         Ok(Vulkano {
@@ -1073,6 +986,7 @@ impl Vulkano {
             pools,
             commandbuffers,
             buffers: vec![buffer_1, buffer_2],
+            allocator: std::mem::ManuallyDrop::new(allocator)
         })
     }
 }
@@ -1083,10 +997,10 @@ impl Drop for Vulkano {
             self.device
                 .device_wait_idle()
                 .expect("Something went wrong while waiting");
-            for buf in &self.buffers {
-                self.device.free_memory(buf.1, None);
-                self.device.destroy_buffer(buf.0, None);
+            for buf in &mut self.buffers {
+                buf.cleanup(&self.device, &mut self.allocator);
             }
+            std::mem::ManuallyDrop::drop(&mut self.allocator);
             self.pools.cleanup(&self.device);
             self.pipeline.cleanup(&self.device);
             self.device.destroy_render_pass(self.renderpass, None);
