@@ -1,3 +1,4 @@
+use std::mem::size_of;
 use std::ptr::copy_nonoverlapping as memcpy;
 use std::{ffi, mem::size_of_val};
 
@@ -286,8 +287,8 @@ fn fill_commandbuffers(
     renderpass: &vk::RenderPass,
     swapchain: &Swapchain,
     pipeline: &Pipeline,
-    vertex_buffer_1: &vk::Buffer,
-    vertex_buffer_2: &vk::Buffer,
+    models: &Vec<Model<[f32; 3], [f32; 6]>>, // vertex_buffer_1: &vk::Buffer,
+                                             // vertex_buffer_2: &vk::Buffer,
 ) -> Result<(), vk::Result> {
     for (i, &commandbuffer) in commandbuffers.iter().enumerate() {
         let commandbuffer_begin_info = vk::CommandBufferBeginInfo::builder();
@@ -318,9 +319,12 @@ fn fill_commandbuffers(
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline.pipeline,
             );
-            logical_device.cmd_bind_vertex_buffers(commandbuffer, 0, &[*vertex_buffer_1], &[0]);
-            logical_device.cmd_bind_vertex_buffers(commandbuffer, 1, &[*vertex_buffer_2], &[0]);
-            logical_device.cmd_draw(commandbuffer, 6, 1, 0, 0);
+            for model in models {
+                model.draw(logical_device, commandbuffer);
+            }
+            // logical_device.cmd_bind_vertex_buffers(commandbuffer, 0, &[*vertex_buffer_1], &[0]);
+            // logical_device.cmd_bind_vertex_buffers(commandbuffer, 1, &[*vertex_buffer_2], &[0]);
+            // logical_device.cmd_draw(commandbuffer, 6, 1, 0, 0);
             logical_device.cmd_end_render_pass(commandbuffer);
             logical_device.end_command_buffer(commandbuffer)?;
         }
@@ -660,7 +664,7 @@ impl Pipeline {
             .name(&main_function_name);
         let shader_stages = vec![vertex_shader_stage.build(), fragment_shader_stage.build()];
 
-        let vertex_attribute_descriptions = [
+        /* let vertex_attribute_descriptions = [
             vk::VertexInputAttributeDescription {
                 binding: 0,
                 location: 0,
@@ -676,9 +680,9 @@ impl Pipeline {
             vk::VertexInputAttributeDescription {
                 binding: 1,
                 location: 2,
-                offset: 4,
-                format: vk::Format::R32G32B32A32_SFLOAT,
-            },
+            offset: 4,
+            format: vk::Format::R32G32B32A32_SFLOAT,
+        },
         ];
 
         let vertex_binding_descriptions = [
@@ -691,6 +695,39 @@ impl Pipeline {
                 binding: 1,
                 stride: 20,
                 input_rate: vk::VertexInputRate::VERTEX,
+            },
+        ]; */
+        let vertex_attribute_descriptions = [
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 0,
+                offset: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 1,
+                offset: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 2,
+                offset: 12,
+                format: vk::Format::R32G32B32_SFLOAT,
+            },
+        ];
+
+        let vertex_binding_descriptions = [
+            vk::VertexInputBindingDescription {
+                binding: 0,
+                stride: 12,
+                input_rate: vk::VertexInputRate::VERTEX,
+            },
+            vk::VertexInputBindingDescription {
+                binding: 1,
+                stride: 24,
+                input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
 
@@ -852,10 +889,10 @@ impl Buffer {
         Buffer { buffer, allocation }
     }
 
-    fn fill(&mut self, data: &[f32]) {
+    fn fill<T>(&mut self, data: &[T]) {
         let destination = self.allocation.mapped_ptr().unwrap().cast().as_ptr();
         unsafe {
-            memcpy::<f32>(data.as_ptr(), destination, data.len());
+            memcpy::<T>(data.as_ptr(), destination, data.len());
         };
     }
 
@@ -873,6 +910,237 @@ impl Buffer {
     }
 }
 
+struct Model<V, I> {
+    vertex_data: Vec<V>,
+    handle_to_index: std::collections::HashMap<usize, usize>,
+    handles: Vec<usize>,
+    instances: Vec<I>,
+    first_invisible: usize,
+    next_handle: usize,
+    vertex_buffer: Option<Buffer>,
+    instance_buffer: Option<Buffer>,
+}
+
+impl<V: std::fmt::Debug, I> Model<V, I> {
+    fn get(&self, handle: usize) -> Option<&I> {
+        if let Some(&index) = self.handle_to_index.get(&handle) {
+            self.instances.get(index)
+        } else {
+            None
+        }
+    }
+
+    fn get_mut(&mut self, handle: usize) -> Option<&mut I> {
+        if let Some(&index) = self.handle_to_index.get(&handle) {
+            self.instances.get_mut(index)
+        } else {
+            None
+        }
+    }
+
+    fn swap_by_handle(&mut self, handle_1: usize, handle_2: usize) -> Result<(), InvalidHandle> {
+        if handle_1 == handle_2 {
+            return Ok(());
+        }
+        if let (Some(&index_1), Some(&index_2)) = (
+            self.handle_to_index.get(&handle_1),
+            self.handle_to_index.get(&handle_2),
+        ) {
+            self.handles.swap(index_1, index_2);
+            self.instances.swap(index_1, index_2);
+            self.handle_to_index.insert(index_1, handle_2);
+            self.handle_to_index.insert(index_2, handle_1);
+            Ok(())
+        } else {
+            Err(InvalidHandle)
+        }
+    }
+
+    fn swap_by_index(&mut self, index_1: usize, index_2: usize) {
+        if index_1 == index_2 {
+            return;
+        }
+        let handle_1 = self.handles[index_1];
+        let handle_2 = self.handles[index_2];
+        self.handles.swap(index_1, index_2);
+        self.instances.swap(index_1, index_2);
+        self.handle_to_index.insert(index_1, handle_2);
+        self.handle_to_index.insert(index_2, handle_1);
+    }
+
+    fn is_visible(&self, handle: usize) -> Result<bool, InvalidHandle> {
+        if let Some(index) = self.handle_to_index.get(&handle) {
+            Ok(index < &self.first_invisible)
+        } else {
+            Err(InvalidHandle)
+        }
+    }
+
+    fn make_visible(&mut self, handle: usize) -> Result<(), InvalidHandle> {
+        if let Some(&index) = self.handle_to_index.get(&handle) {
+            if index < self.first_invisible {
+                return Ok(());
+            }
+            self.swap_by_index(index, self.first_invisible);
+            self.first_invisible += 1;
+            Ok(())
+        } else {
+            Err(InvalidHandle)
+        }
+    }
+
+    fn make_invisible(&mut self, handle: &usize) -> Result<(), InvalidHandle> {
+        if let Some(&index) = self.handle_to_index.get(&handle) {
+            if index >= self.first_invisible {
+                return Ok(());
+            }
+            self.swap_by_index(index, self.first_invisible - 1);
+            self.first_invisible -= 1;
+            Ok(())
+        } else {
+            Err(InvalidHandle)
+        }
+    }
+
+    fn insert(&mut self, element: I) -> usize {
+        let handle = self.next_handle;
+        self.next_handle += 1;
+        let index = self.instances.len();
+        self.instances.push(element);
+        self.handles.push(handle);
+        self.handle_to_index.insert(handle, index);
+        handle
+    }
+
+    fn insert_visibly(&mut self, element: I) -> usize {
+        let new_handle = self.insert(element);
+        self.make_visible(new_handle).ok();
+        new_handle
+    }
+
+    fn remove(&mut self, handle: usize) -> Result<I, InvalidHandle> {
+        if let Some(&index) = self.handle_to_index.get(&handle) {
+            if index < self.first_invisible {
+                self.swap_by_index(index, self.first_invisible - 1);
+                self.first_invisible -= 1;
+            }
+            self.swap_by_index(self.first_invisible, self.instances.len() - 1);
+            self.handles.pop();
+            self.handle_to_index.remove(&handle);
+
+            Ok(self.instances.pop().unwrap())
+        } else {
+            Err(InvalidHandle)
+        }
+    }
+
+    fn update_vertex_buffer(
+        &mut self,
+        logical_device: &ash::Device,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+    ) -> Result<(), ()> {
+        if let Some(buffer) = &mut self.vertex_buffer {
+            buffer.fill(&self.vertex_data);
+            Ok(())
+        } else {
+            let bytes = (size_of::<V>()*self.vertex_data.len()) as u64;
+            let mut buffer = Buffer::new(logical_device, allocator, bytes);
+            buffer.fill(&self.vertex_data);
+            self.vertex_buffer = Some(buffer);
+            Ok(())
+        }
+    }
+
+    fn update_instance_buffer(
+        &mut self,
+        logical_device: &ash::Device,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+    ) -> Result<(), ()> {
+        if let Some(buffer) = &mut self.instance_buffer {
+            buffer.fill(&self.instances[0..self.first_invisible]);
+            Ok(())
+        } else {
+            let bytes = (self.first_invisible * size_of::<I>()) as u64;
+            let mut buffer = Buffer::new(logical_device, allocator, bytes);
+            buffer.fill(&self.instances[0..self.first_invisible]);
+            self.instance_buffer = Some(buffer);
+            Ok(())
+        }
+    }
+
+    fn draw(&self, logical_device: &ash::Device, commandbuffer: vk::CommandBuffer) {
+        if let Some(vertexbuffer) = &self.vertex_buffer {
+            if let Some(instancebuffer) = &self.instance_buffer {
+                if self.first_invisible > 0 {
+                    unsafe {
+                        logical_device.cmd_bind_vertex_buffers(
+                            commandbuffer,
+                            0,
+                            &[vertexbuffer.buffer],
+                            &[0],
+                        );
+                        logical_device.cmd_bind_vertex_buffers(
+                            commandbuffer,
+                            1,
+                            &[instancebuffer.buffer],
+                            &[0],
+                        );
+                        logical_device.cmd_draw(
+                            commandbuffer,
+                            self.vertex_data.len() as u32,
+                            self.first_invisible as u32,
+                            0,
+                            0,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Model<[f32; 3], [f32; 6]> {
+    fn cube() -> Model<[f32; 3], [f32; 6]> {
+        let lbf = [-0.1, 0.1, 0.0]; //lbf: left-bottom-front
+        let lbb = [-0.1, 0.1, 0.1];
+        let ltf = [-0.1, -0.1, 0.0];
+        let ltb = [-0.1, -0.1, 0.1];
+        let rbf = [0.1, 0.1, 0.0];
+        let rbb = [0.1, 0.1, 0.1];
+        let rtf = [0.1, -0.1, 0.0];
+        let rtb = [0.1, -0.1, 0.1];
+        Model {
+            vertex_data: vec![
+                lbf, lbb, rbb, lbf, rbb, rbf, //bottom
+                ltf, rtb, ltb, ltf, rtf, rtb, //top
+                lbf, rtf, ltf, lbf, rbf, rtf, //front
+                lbb, ltb, rtb, lbb, rtb, rbb, //back
+                lbf, ltf, lbb, lbb, ltf, ltb, //left
+                rbf, rbb, rtf, rbb, rtb, rtf, //right
+            ],
+            handle_to_index: std::collections::HashMap::new(),
+            handles: Vec::new(),
+            instances: Vec::new(),
+            first_invisible: 0,
+            next_handle: 0,
+            vertex_buffer: None,
+            instance_buffer: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InvalidHandle;
+impl std::fmt::Display for InvalidHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid handle")
+    }
+}
+impl std::error::Error for InvalidHandle {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+}
 
 struct Vulkano {
     window: winit::window::Window,
@@ -891,8 +1159,9 @@ struct Vulkano {
     pipeline: Pipeline,
     pools: Pools,
     commandbuffers: Vec<vk::CommandBuffer>,
-    buffers: Vec<Buffer>,
-    allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>
+    // buffers: Vec<Buffer>,
+    models: Vec<Model<[f32; 3], [f32; 6]>>,
+    allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>,
 }
 
 impl Vulkano {
@@ -929,7 +1198,7 @@ impl Vulkano {
         let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
         let pools = Pools::init(&logical_device, &queue_families)?;
 
-        let mut allocator_create_description = gpu_allocator::vulkan::AllocatorCreateDesc {
+        let allocator_create_description = gpu_allocator::vulkan::AllocatorCreateDesc {
             instance: instance.clone(),
             device: logical_device.clone(),
             physical_device,
@@ -940,12 +1209,23 @@ impl Vulkano {
         let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_description)
             .expect("Failed to create allocator");
 
-        let data_1 = [
+        let mut cube = Model::cube();
+        cube.insert_visibly([0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        cube.insert_visibly([0.0, 0.25, 0.0, 0.6, 0.5, 0.0]);
+        cube.insert_visibly([0.0, 0.5, 0.0, 0.0, 0.5, 0.0]);
+        cube.update_vertex_buffer(&logical_device, &mut allocator)
+            .unwrap();
+        cube.update_instance_buffer(&logical_device, &mut allocator)
+            .unwrap();
+        let models = vec![cube];
+
+        /* let data_1 = [
             0.5f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.2f32, 0.0f32, 1.0f32, -0.5f32, 0.0f32,
             0.0f32, 1.0f32, -0.9f32, -0.9f32, 0.0f32, 1.0f32, 0.3f32, -0.8f32, 0.0f32, 1.0f32,
             0.0f32, -0.6f32, 0.0f32, 1.0f32,
         ];
-        let mut buffer_1 = Buffer::new(&logical_device, &mut allocator, size_of_val(&data_1) as u64);
+        let mut buffer_1 =
+            Buffer::new(&logical_device, &mut allocator, size_of_val(&data_1) as u64);
         buffer_1.fill(&data_1);
 
         let data_2 = [
@@ -953,8 +1233,9 @@ impl Vulkano {
             15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32,
             1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32, 1.0f32, 0.0f32, 0.0f32, 1.0f32, 1.0f32,
         ];
-        let mut buffer_2 = Buffer::new(&logical_device, &mut allocator, size_of_val(&data_2) as u64);
-        buffer_2.fill(&data_2);
+        let mut buffer_2 =
+            Buffer::new(&logical_device, &mut allocator, size_of_val(&data_2) as u64);
+        buffer_2.fill(&data_2); */
 
         let commandbuffers =
             create_commandbuffers(&logical_device, &pools, swapchain.framebuffers.len())?;
@@ -964,8 +1245,8 @@ impl Vulkano {
             &renderpass,
             &swapchain,
             &pipeline,
-            &buffer_1.buffer,
-            &buffer_2.buffer,
+            &models, // &buffer_1.buffer,
+                     // &buffer_2.buffer,
         )?;
 
         Ok(Vulkano {
@@ -985,8 +1266,9 @@ impl Vulkano {
             pipeline,
             pools,
             commandbuffers,
-            buffers: vec![buffer_1, buffer_2],
-            allocator: std::mem::ManuallyDrop::new(allocator)
+            // buffers: vec![buffer_1, buffer_2],
+            models,
+            allocator: std::mem::ManuallyDrop::new(allocator),
         })
     }
 }
@@ -997,9 +1279,17 @@ impl Drop for Vulkano {
             self.device
                 .device_wait_idle()
                 .expect("Something went wrong while waiting");
-            for buf in &mut self.buffers {
-                buf.cleanup(&self.device, &mut self.allocator);
+            for m in &mut self.models {
+                if let Some(vb) = &mut m.vertex_buffer {
+                    vb.cleanup(&self.device, &mut self.allocator);
+                }
+                if let Some(ib) = &mut m.instance_buffer {
+                    ib.cleanup(&self.device, &mut self.allocator);
+                }
             }
+            /* for buf in &mut self.buffers {
+                buf.cleanup(&self.device, &mut self.allocator);
+            } */
             std::mem::ManuallyDrop::drop(&mut self.allocator);
             self.pools.cleanup(&self.device);
             self.pipeline.cleanup(&self.device);
