@@ -232,25 +232,41 @@ fn init_device_and_queues(
 
 fn init_renderpass(
     logical_device: &ash::Device,
-    physical_device: vk::PhysicalDevice,
     format: vk::Format,
 ) -> Result<vk::RenderPass, vk::Result> {
-    let attachments = [vk::AttachmentDescription::builder()
-        .format(format)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .build()];
+    let attachments = [
+        vk::AttachmentDescription::builder()
+            .format(format)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .build(),
+        vk::AttachmentDescription::builder()
+            .format(vk::Format::D32_SFLOAT)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .build(),
+    ];
     let color_attachment_references = [vk::AttachmentReference {
         attachment: 0,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }];
+    let depth_attachment_references = vk::AttachmentReference {
+        attachment: 1,
+        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
     let subpasses = [vk::SubpassDescription::builder()
         .color_attachments(&color_attachment_references)
+        .depth_stencil_attachment(&depth_attachment_references)
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .build()];
     let subpass_dependencies = [vk::SubpassDependency::builder()
@@ -287,19 +303,27 @@ fn fill_commandbuffers(
     renderpass: &vk::RenderPass,
     swapchain: &Swapchain,
     pipeline: &Pipeline,
-    models: &Vec<Model<[f32; 3], [f32; 6]>>, // vertex_buffer_1: &vk::Buffer,
-                                             // vertex_buffer_2: &vk::Buffer,
+    models: &Vec<Model<[f32; 3], InstanceData>>, // vertex_buffer_1: &vk::Buffer,
+                                                 // vertex_buffer_2: &vk::Buffer,
 ) -> Result<(), vk::Result> {
     for (i, &commandbuffer) in commandbuffers.iter().enumerate() {
         let commandbuffer_begin_info = vk::CommandBufferBeginInfo::builder();
         unsafe {
             logical_device.begin_command_buffer(commandbuffer, &commandbuffer_begin_info)?;
         }
-        let clearvalues = [vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.2, 0.2, 0.2, 1.0],
+        let clearvalues = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.2, 0.2, 0.2, 1.0],
+                },
             },
-        }];
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
         let renderpass_being_info = vk::RenderPassBeginInfo::builder()
             .render_pass(*renderpass)
             .framebuffer(swapchain.framebuffers[i])
@@ -500,6 +524,7 @@ struct Swapchain {
     may_begin_drawing: Vec<vk::Fence>,
     amount_of_images: u32,
     current_image: usize,
+    depth_data: DepthData,
 }
 
 impl Swapchain {
@@ -570,6 +595,17 @@ impl Swapchain {
             may_begin_drawing.push(fence);
         }
 
+        let mut depth_data = DepthData::init();
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        depth_data.create_depth_resources(
+            instance,
+            logical_device,
+            physical_device,
+            extent,
+            &memory_properties,
+        );
+
         Ok(Swapchain {
             swapchain_loader,
             swapchain,
@@ -583,6 +619,7 @@ impl Swapchain {
             may_begin_drawing,
             amount_of_images,
             current_image: 0,
+            depth_data,
         })
     }
 
@@ -592,7 +629,7 @@ impl Swapchain {
         renderpass: vk::RenderPass,
     ) -> Result<(), vk::Result> {
         for image_view in &self.image_views {
-            let view = [*image_view];
+            let view = [*image_view, self.depth_data.depth_image_view.unwrap()];
             let framebuffer_info = vk::FramebufferCreateInfo::builder()
                 .render_pass(renderpass)
                 .attachments(&view)
@@ -606,6 +643,10 @@ impl Swapchain {
     }
 
     unsafe fn cleanup(&self, logical_device: &ash::Device) {
+        logical_device.destroy_image_view(self.depth_data.depth_image_view.unwrap(), None);
+        logical_device.destroy_image(self.depth_data.depth_image.unwrap(), None);
+        logical_device.free_memory(self.depth_data.depth_image_memory.unwrap(), None);
+
         for fence in &self.may_begin_drawing {
             logical_device.destroy_fence(*fence, None);
         }
@@ -623,6 +664,211 @@ impl Swapchain {
         }
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None)
+    }
+}
+
+struct DepthData {
+    depth_image: Option<vk::Image>,
+    depth_image_view: Option<vk::ImageView>,
+    depth_image_memory: Option<vk::DeviceMemory>,
+}
+
+impl DepthData {
+    fn init() -> DepthData {
+        DepthData {
+            depth_image: None,
+            depth_image_view: None,
+            depth_image_memory: None,
+        }
+    }
+
+    fn create_depth_resources(
+        &mut self,
+        instance: &Instance,
+        logical_device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+        swapchain_extent: vk::Extent2D,
+        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    ) {
+        let depth_format = self.find_supported_format(
+            instance,
+            physical_device,
+            &[
+                vk::Format::D32_SFLOAT,
+                vk::Format::D32_SFLOAT_S8_UINT,
+                vk::Format::D24_UNORM_S8_UINT,
+            ],
+            vk::ImageTiling::OPTIMAL,
+            vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+        );
+        let (depth_image, depth_image_memory) = self.create_image(
+            logical_device,
+            swapchain_extent.width,
+            swapchain_extent.height,
+            1,
+            vk::SampleCountFlags::TYPE_1,
+            depth_format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            device_memory_properties,
+        );
+        let depth_image_view = self.create_image_view(
+            logical_device,
+            depth_image,
+            depth_format,
+            vk::ImageAspectFlags::DEPTH,
+            1,
+        );
+
+        self.depth_image = Some(depth_image);
+        self.depth_image_view = Some(depth_image_view);
+        self.depth_image_memory = Some(depth_image_memory);
+    }
+
+    fn find_supported_format(
+        &self,
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        candidate_formats: &[vk::Format],
+        tiling: vk::ImageTiling,
+        features: vk::FormatFeatureFlags,
+    ) -> vk::Format {
+        for &format in candidate_formats.iter() {
+            let format_properties =
+                unsafe { instance.get_physical_device_format_properties(physical_device, format) };
+            if tiling == vk::ImageTiling::LINEAR
+                && format_properties.linear_tiling_features.contains(features)
+            {
+                return format.clone();
+            } else if tiling == vk::ImageTiling::OPTIMAL
+                && format_properties.optimal_tiling_features.contains(features)
+            {
+                return format.clone();
+            }
+        }
+        panic!("Failed to find supported format")
+    }
+
+    fn create_image(
+        &self,
+        logical_device: &ash::Device,
+        width: u32,
+        height: u32,
+        mip_levels: u32,
+        num_samples: vk::SampleCountFlags,
+        format: vk::Format,
+        tiling: vk::ImageTiling,
+        usage: vk::ImageUsageFlags,
+        required_memory_properties: vk::MemoryPropertyFlags,
+        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    ) -> (vk::Image, vk::DeviceMemory) {
+        let image_create_info = vk::ImageCreateInfo {
+            s_type: vk::StructureType::IMAGE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::ImageCreateFlags::empty(),
+            image_type: vk::ImageType::TYPE_2D,
+            format,
+            mip_levels,
+            array_layers: 1,
+            samples: num_samples,
+            tiling,
+            usage,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: std::ptr::null(),
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
+        };
+
+        let texture_image = unsafe {
+            logical_device
+                .create_image(&image_create_info, None)
+                .expect("Faield to create texture image")
+        };
+
+        let image_memory_requirement =
+            unsafe { logical_device.get_image_memory_requirements(texture_image) };
+        let memory_allocate_info = vk::MemoryAllocateInfo {
+            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            allocation_size: image_memory_requirement.size,
+            memory_type_index: self.find_memory_type(
+                image_memory_requirement.memory_type_bits,
+                required_memory_properties,
+                device_memory_properties,
+            ),
+        };
+
+        let texture_image_memory = unsafe {
+            logical_device
+                .allocate_memory(&memory_allocate_info, None)
+                .expect("Failed to allocate texture image memory")
+        };
+
+        unsafe {
+            logical_device
+                .bind_image_memory(texture_image, texture_image_memory, 0)
+                .expect("Failed to bind image memory")
+        };
+
+        (texture_image, texture_image_memory)
+    }
+
+    fn find_memory_type(
+        &self,
+        type_filter: u32,
+        required_properties: vk::MemoryPropertyFlags,
+        memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    ) -> u32 {
+        for (i, memory_type) in memory_properties.memory_types.iter().enumerate() {
+            if (type_filter & (1 << i)) > 0
+                && memory_type.property_flags.contains(required_properties)
+            {
+                return i as u32;
+            }
+        }
+        panic!("Failed to find suitable memory type")
+    }
+
+    fn create_image_view(
+        &self,
+        logical_device: &ash::Device,
+        image: vk::Image,
+        format: vk::Format,
+        aspect_flags: vk::ImageAspectFlags,
+        mip_levels: u32,
+    ) -> vk::ImageView {
+        let image_view_create_info = vk::ImageViewCreateInfo::builder()
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .components(
+                vk::ComponentMapping::builder()
+                    .r(vk::ComponentSwizzle::IDENTITY)
+                    .g(vk::ComponentSwizzle::IDENTITY)
+                    .b(vk::ComponentSwizzle::IDENTITY)
+                    .a(vk::ComponentSwizzle::IDENTITY)
+                    .build(),
+            )
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(aspect_flags)
+                    .base_mip_level(0)
+                    .level_count(mip_levels)
+                    .base_array_layer(0)
+                    .layer_count(1)
+                    .build(),
+            )
+            .image(image);
+        unsafe {
+            logical_device
+                .create_image_view(&image_view_create_info, None)
+                .expect("Failed to create image view")
+        }
     }
 }
 
@@ -708,12 +954,30 @@ impl Pipeline {
                 binding: 1,
                 location: 1,
                 offset: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
+                format: vk::Format::R32G32B32A32_SFLOAT,
             },
             vk::VertexInputAttributeDescription {
                 binding: 1,
                 location: 2,
-                offset: 12,
+                offset: 16,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 3,
+                offset: 32,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 4,
+                offset: 48,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 5,
+                offset: 64,
                 format: vk::Format::R32G32B32_SFLOAT,
             },
         ];
@@ -726,7 +990,7 @@ impl Pipeline {
             },
             vk::VertexInputBindingDescription {
                 binding: 1,
-                stride: 24,
+                stride: 76,
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
@@ -774,6 +1038,10 @@ impl Pipeline {
                     | vk::ColorComponentFlags::A,
             )
             .build()];
+        let depth_stencil_info = vk::PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
         let colorblend_info =
             vk::PipelineColorBlendStateCreateInfo::builder().attachments(&colorblend_attachments);
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder();
@@ -786,6 +1054,7 @@ impl Pipeline {
             .viewport_state(&viewport_info)
             .rasterization_state(&rasterizer_info)
             .multisample_state(&multisampler_info)
+            .depth_stencil_state(&depth_stencil_info)
             .color_blend_state(&colorblend_info)
             .layout(pipeline_layout)
             .render_pass(*renderpass)
@@ -1043,7 +1312,7 @@ impl<V: std::fmt::Debug, I> Model<V, I> {
             buffer.fill(&self.vertex_data);
             Ok(())
         } else {
-            let bytes = (size_of::<V>()*self.vertex_data.len()) as u64;
+            let bytes = (size_of::<V>() * self.vertex_data.len()) as u64;
             let mut buffer = Buffer::new(logical_device, allocator, bytes);
             buffer.fill(&self.vertex_data);
             self.vertex_buffer = Some(buffer);
@@ -1099,16 +1368,22 @@ impl<V: std::fmt::Debug, I> Model<V, I> {
     }
 }
 
-impl Model<[f32; 3], [f32; 6]> {
-    fn cube() -> Model<[f32; 3], [f32; 6]> {
-        let lbf = [-0.1, 0.1, 0.0]; //lbf: left-bottom-front
-        let lbb = [-0.1, 0.1, 0.1];
-        let ltf = [-0.1, -0.1, 0.0];
-        let ltb = [-0.1, -0.1, 0.1];
-        let rbf = [0.1, 0.1, 0.0];
-        let rbb = [0.1, 0.1, 0.1];
-        let rtf = [0.1, -0.1, 0.0];
-        let rtb = [0.1, -0.1, 0.1];
+#[repr(C)]
+struct InstanceData {
+    model_matrix: [[f32; 4]; 4],
+    color: [f32; 3],
+}
+
+impl Model<[f32; 3], InstanceData> {
+    fn cube() -> Model<[f32; 3], InstanceData> {
+        let lbf = [-1.0, 1.0, 0.0]; //lbf: left-bottom-front
+        let lbb = [-1.0, 1.0, 2.0];
+        let ltf = [-1.0, -1.0, 0.0];
+        let ltb = [-1.0, -1.0, 2.0];
+        let rbf = [1.0, 1.0, 0.0];
+        let rbb = [1.0, 0.1, 2.0];
+        let rtf = [1.0, -1.0, 0.0];
+        let rtb = [1.0, -1.0, 2.0];
         Model {
             vertex_data: vec![
                 lbf, lbb, rbb, lbf, rbb, rbf, //bottom
@@ -1160,7 +1435,7 @@ struct Vulkano {
     pools: Pools,
     commandbuffers: Vec<vk::CommandBuffer>,
     // buffers: Vec<Buffer>,
-    models: Vec<Model<[f32; 3], [f32; 6]>>,
+    models: Vec<Model<[f32; 3], InstanceData>>,
     allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>,
 }
 
@@ -1188,11 +1463,7 @@ impl Vulkano {
             &queue_families,
             &queues,
         )?;
-        let renderpass = init_renderpass(
-            &logical_device,
-            physical_device,
-            swapchain.surface_format.format,
-        )?;
+        let renderpass = init_renderpass(&logical_device, swapchain.surface_format.format)?;
         swapchain.create_framebuffers(&logical_device, renderpass)?;
 
         let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
@@ -1210,9 +1481,20 @@ impl Vulkano {
             .expect("Failed to create allocator");
 
         let mut cube = Model::cube();
-        cube.insert_visibly([0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-        cube.insert_visibly([0.0, 0.25, 0.0, 0.6, 0.5, 0.0]);
-        cube.insert_visibly([0.0, 0.5, 0.0, 0.0, 0.5, 0.0]);
+        cube.insert_visibly(InstanceData {
+            model_matrix: (nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(
+                0.05, 0.05, 0.0,
+            )) * nalgebra::Matrix4::new_scaling(0.1))
+            .into(),
+            color: [1.0, 1.0, 0.2],
+        });
+        cube.insert_visibly(InstanceData {
+            model_matrix: (nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(
+                0.0, 0.0, 0.1,
+            )) * nalgebra::Matrix4::new_scaling(0.1))
+            .into(),
+            color: [0.2, 0.4, 1.0],
+        });
         cube.update_vertex_buffer(&logical_device, &mut allocator)
             .unwrap();
         cube.update_instance_buffer(&logical_device, &mut allocator)
