@@ -3,6 +3,7 @@ use std::ptr::copy_nonoverlapping as memcpy;
 use std::{ffi, mem::size_of_val};
 
 use ash::{vk, Entry, Instance};
+use nalgebra as na;
 use winit::{dpi::PhysicalSize, window::WindowBuilder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,17 +15,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut vulkano = Vulkano::init(window)?;
 
+    let mut camera = Camera::default();
+
     let mut cube = Model::cube();
-    let mut angle = 0.2;
-    let spinny_cube = cube.insert_visibly(InstanceData {
-        model_matrix: (nalgebra::Matrix4::from_scaled_axis(nalgebra::Vector3::new(
-            0.0, 0.0, angle,
-        )) * nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(
-            0.0, 0.5, 0.0,
-        )) * nalgebra::Matrix4::new_scaling(0.1))
+    cube.insert_visibly(InstanceData {
+        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.1))
+            * na::Matrix4::new_scaling(0.1))
+        .into(),
+        color: [0.2, 0.4, 1.0],
+    });
+    cube.insert_visibly(InstanceData {
+        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.05, 0.05, 0.0))
+            * na::Matrix4::new_scaling(0.1))
+        .into(),
+        color: [1.0, 1.0, 0.2],
+    });
+    for i in 0..10 {
+        for j in 0..10 {
+            cube.insert_visibly(InstanceData {
+                model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(
+                    i as f32 * 0.2 - 1.0,
+                    j as f32 * 0.2 - 1.0,
+                    0.5,
+                )) * na::Matrix4::new_scaling(0.03))
+                .into(),
+                color: [1.0, i as f32 * 0.07, j as f32 * 0.07],
+            });
+            cube.insert_visibly(InstanceData {
+                model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(
+                    i as f32 * 0.2 - 1.0,
+                    0.0,
+                    j as f32 * 0.2 - 1.0,
+                )) * na::Matrix4::new_scaling(0.02))
+                .into(),
+                color: [i as f32 * 0.07, j as f32 * 0.07, 1.0],
+            });
+        }
+    }
+    cube.insert_visibly(InstanceData {
+        model_matrix: (na::Matrix4::from_scaled_axis(na::Vector3::new(0.0, 0.0, 1.4))
+            * na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.5, 0.0))
+            * na::Matrix4::new_scaling(0.1))
         .into(),
         color: [0.0, 0.5, 0.0],
     });
+    cube.insert_visibly(InstanceData {
+        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.5, 0.0, 0.0))
+            * na::Matrix4::new_nonuniform_scaling(&na::Vector3::new(0.5, 0.01, 0.01)))
+        .into(),
+        color: [1.0, 0.5, 0.5],
+    });
+    cube.insert_visibly(InstanceData {
+        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.5, 0.0))
+            * na::Matrix4::new_nonuniform_scaling(&na::Vector3::new(0.01, 0.5, 0.01)))
+        .into(),
+        color: [0.5, 1.0, 0.5],
+    });
+    cube.insert_visibly(InstanceData {
+        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0))
+            * na::Matrix4::new_nonuniform_scaling(&na::Vector3::new(0.01, 0.01, 0.5)))
+        .into(),
+        color: [0.5, 0.5, 1.0],
+    });
+
     cube.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
     cube.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
@@ -33,6 +86,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
+        Event::WindowEvent {
+            event: WindowEvent::KeyboardInput { input, .. },
+            ..
+        } => {
+            if let winit::event::KeyboardInput {
+                state: winit::event::ElementState::Pressed,
+                virtual_keycode: Some(keycode),
+                ..
+            } = input
+            {
+                match keycode {
+                    winit::event::VirtualKeyCode::Right => {
+                        camera.turn_right(0.1);
+                    }
+                    winit::event::VirtualKeyCode::Left => {
+                        camera.turn_left(0.1);
+                    }
+                    winit::event::VirtualKeyCode::Up => {
+                        camera.move_forward(0.05);
+                    }
+                    winit::event::VirtualKeyCode::Down => {
+                        camera.move_backward(0.05);
+                    }
+                    winit::event::VirtualKeyCode::PageUp => {
+                        camera.turn_up(0.02);
+                    }
+                    winit::event::VirtualKeyCode::PageDown => {
+                        camera.turn_down(0.02);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Event::WindowEvent {
             event: WindowEvent::CloseRequested,
             ..
@@ -67,6 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vulkano.swapchain.may_begin_drawing[vulkano.swapchain.current_image]
                     ])
                     .expect("Resetting fences");
+                camera.update_buffer(&mut vulkano.uniform_buffer);
                 for model in &mut vulkano.models {
                     model
                         .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
@@ -115,12 +203,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (vulkano.swapchain.current_image + 1) % vulkano.swapchain.amount_of_images as usize;
         }
         Event::MainEventsCleared => {
-            angle += 0.01;
-            vulkano.models[0].get_mut(spinny_cube).unwrap().model_matrix =
-                (nalgebra::Matrix4::from_scaled_axis(nalgebra::Vector3::new(0.0, 0.0, angle))
-                    * nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(0.0, 0.5, 0.0))
-                    * nalgebra::Matrix4::new_scaling(0.1))
-                .into();
             vulkano.window.request_redraw();
         }
         _ => {}
@@ -328,65 +410,6 @@ fn create_commandbuffers(
         .command_buffer_count(amount as u32);
     unsafe { logical_device.allocate_command_buffers(&commandbuffer_allocate_info) }
 }
-
-/* fn fill_commandbuffers(
-    logical_device: &ash::Device,
-    commandbuffers: &Vec<vk::CommandBuffer>,
-    renderpass: &vk::RenderPass,
-    swapchain: &Swapchain,
-    pipeline: &Pipeline,
-    models: &Vec<Model<[f32; 3], InstanceData>>, // vertex_buffer_1: &vk::Buffer,
-                                                 // vertex_buffer_2: &vk::Buffer,
-) -> Result<(), vk::Result> {
-    for (i, &commandbuffer) in commandbuffers.iter().enumerate() {
-        let commandbuffer_begin_info = vk::CommandBufferBeginInfo::builder();
-        unsafe {
-            logical_device.begin_command_buffer(commandbuffer, &commandbuffer_begin_info)?;
-        }
-        let clearvalues = [
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.2, 0.2, 0.2, 1.0],
-                },
-            },
-            vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            },
-        ];
-        let renderpass_being_info = vk::RenderPassBeginInfo::builder()
-            .render_pass(*renderpass)
-            .framebuffer(swapchain.framebuffers[i])
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: swapchain.extent,
-            })
-            .clear_values(&clearvalues);
-        unsafe {
-            logical_device.cmd_begin_render_pass(
-                commandbuffer,
-                &renderpass_being_info,
-                vk::SubpassContents::INLINE,
-            );
-            logical_device.cmd_bind_pipeline(
-                commandbuffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.pipeline,
-            );
-            for model in models {
-                model.draw(logical_device, commandbuffer);
-            }
-            // logical_device.cmd_bind_vertex_buffers(commandbuffer, 0, &[*vertex_buffer_1], &[0]);
-            // logical_device.cmd_bind_vertex_buffers(commandbuffer, 1, &[*vertex_buffer_2], &[0]);
-            // logical_device.cmd_draw(commandbuffer, 6, 1, 0, 0);
-            logical_device.cmd_end_render_pass(commandbuffer);
-            logical_device.end_command_buffer(commandbuffer)?;
-        }
-    }a
-    Ok(())
-} */
 
 struct Debug {
     loader: ash::extensions::ext::DebugUtils,
@@ -907,14 +930,9 @@ impl DepthData {
 struct Pipeline {
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
+    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
 }
 impl Pipeline {
-    fn cleanup(&mut self, logical_device: &ash::Device) {
-        unsafe {
-            logical_device.destroy_pipeline(self.pipeline, None);
-            logical_device.destroy_pipeline_layout(self.layout, None);
-        }
-    }
     fn init(
         logical_device: &ash::Device,
         swapchain: &Swapchain,
@@ -942,39 +960,6 @@ impl Pipeline {
             .name(&main_function_name);
         let shader_stages = vec![vertex_shader_stage.build(), fragment_shader_stage.build()];
 
-        /* let vertex_attribute_descriptions = [
-            vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 0,
-                offset: 0,
-                format: vk::Format::R32G32B32A32_SFLOAT,
-            },
-            vk::VertexInputAttributeDescription {
-                binding: 1,
-                location: 1,
-                offset: 0,
-                format: vk::Format::R32_SFLOAT,
-            },
-            vk::VertexInputAttributeDescription {
-                binding: 1,
-                location: 2,
-            offset: 4,
-            format: vk::Format::R32G32B32A32_SFLOAT,
-        },
-        ];
-
-        let vertex_binding_descriptions = [
-            vk::VertexInputBindingDescription {
-                binding: 0,
-                stride: 16,
-                input_rate: vk::VertexInputRate::VERTEX,
-            },
-            vk::VertexInputBindingDescription {
-                binding: 1,
-                stride: 20,
-                input_rate: vk::VertexInputRate::VERTEX,
-            },
-        ]; */
         let vertex_attribute_descriptions = [
             vk::VertexInputAttributeDescription {
                 binding: 0,
@@ -1070,13 +1055,30 @@ impl Pipeline {
                     | vk::ColorComponentFlags::A,
             )
             .build()];
+
         let depth_stencil_info = vk::PipelineDepthStencilStateCreateInfo::builder()
             .depth_test_enable(true)
             .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::LESS);
         let colorblend_info =
             vk::PipelineColorBlendStateCreateInfo::builder().attachments(&colorblend_attachments);
-        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder();
+
+        let descriptor_set_layout_binding_descriptions =
+            [vk::DescriptorSetLayoutBinding::builder()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX)
+                .build()];
+
+        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&descriptor_set_layout_binding_descriptions);
+        let descriptor_set_layout = unsafe {
+            logical_device.create_descriptor_set_layout(&descriptor_set_layout_info, None)
+        }?;
+        let descriptor_layouts = vec![descriptor_set_layout];
+        let pipeline_layout_info =
+            vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_layouts);
         let pipeline_layout =
             unsafe { logical_device.create_pipeline_layout(&pipeline_layout_info, None)? };
         let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
@@ -1107,7 +1109,18 @@ impl Pipeline {
         Ok(Pipeline {
             pipeline: graphics_pipeline,
             layout: pipeline_layout,
+            descriptor_set_layouts: descriptor_layouts,
         })
+    }
+
+    fn cleanup(&mut self, logical_device: &ash::Device) {
+        unsafe {
+            for layout in &self.descriptor_set_layouts {
+                logical_device.destroy_descriptor_set_layout(*layout, None);
+            }
+            logical_device.destroy_pipeline(self.pipeline, None);
+            logical_device.destroy_pipeline_layout(self.layout, None);
+        }
     }
 }
 
@@ -1154,10 +1167,11 @@ impl Buffer {
         logical_device: &ash::Device,
         allocator: &mut gpu_allocator::vulkan::Allocator,
         size: u64,
+        usage: vk::BufferUsageFlags,
     ) -> Buffer {
         let buffer_create_info = vk::BufferCreateInfo::builder()
             .size(size)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let buffer = unsafe {
@@ -1345,7 +1359,12 @@ impl<V: std::fmt::Debug, I> Model<V, I> {
             Ok(())
         } else {
             let bytes = (size_of::<V>() * self.vertex_data.len()) as u64;
-            let mut buffer = Buffer::new(logical_device, allocator, bytes);
+            let mut buffer = Buffer::new(
+                logical_device,
+                allocator,
+                bytes,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+            );
             buffer.fill(&self.vertex_data);
             self.vertex_buffer = Some(buffer);
             Ok(())
@@ -1362,7 +1381,12 @@ impl<V: std::fmt::Debug, I> Model<V, I> {
             Ok(())
         } else {
             let bytes = (self.first_invisible * size_of::<I>()) as u64;
-            let mut buffer = Buffer::new(logical_device, allocator, bytes);
+            let mut buffer = Buffer::new(
+                logical_device,
+                allocator,
+                bytes,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+            );
             buffer.fill(&self.instances[0..self.first_invisible]);
             self.instance_buffer = Some(buffer);
             Ok(())
@@ -1449,6 +1473,85 @@ impl std::error::Error for InvalidHandle {
     }
 }
 
+struct Camera {
+    view_matrix: na::Matrix4<f32>,
+    position: na::Vector3<f32>,
+    view_direction: na::Unit<na::Vector3<f32>>,
+    down_direction: na::Unit<na::Vector3<f32>>,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Camera {
+            view_matrix: na::Matrix4::identity(),
+            position: na::Vector3::new(0.0, 0.0, 0.0),
+            view_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, 1.0)),
+            down_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, 0.0)),
+        }
+    }
+}
+
+impl Camera {
+    fn update_buffer(&self, buffer: &mut Buffer) {
+        let data: [[f32; 4]; 4] = self.view_matrix.into();
+        buffer.fill(&data);
+    }
+
+    fn update_view_matrix(&mut self) {
+        let right = na::Unit::new_normalize(self.down_direction.cross(&self.view_direction));
+        let matrix = na::Matrix4::new(
+            right.x,
+            right.y,
+            right.z,
+            -right.dot(&self.position), //
+            self.down_direction.x,
+            self.down_direction.y,
+            self.down_direction.z,
+            -self.down_direction.dot(&self.position), //
+            self.view_direction.x,
+            self.view_direction.y,
+            self.view_direction.z,
+            -self.view_direction.dot(&self.position), //
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        );
+        self.view_matrix = matrix;
+    }
+
+    fn move_forward(&mut self, distance: f32) {
+        self.position += distance * self.view_direction.as_ref();
+        self.update_view_matrix();
+    }
+
+    fn move_backward(&mut self, distance: f32) {
+        self.move_forward(-distance);
+    }
+
+    fn turn_right(&mut self, angle: f32) {
+        let rotation = na::Rotation3::from_axis_angle(&self.down_direction, angle);
+        self.view_direction = rotation * self.view_direction;
+        self.update_view_matrix();
+    }
+
+    fn turn_left(&mut self, angle: f32) {
+        self.turn_right(-angle);
+    }
+
+    fn turn_up(&mut self, angle: f32) {
+        let right = na::Unit::new_normalize(self.down_direction.cross(&self.view_direction));
+        let rotation = na::Rotation3::from_axis_angle(&right, angle);
+        self.view_direction = rotation * self.view_direction;
+        self.down_direction = rotation * self.down_direction;
+        self.update_view_matrix();
+    }
+
+    fn turn_down(&mut self, angle: f32) {
+        self.turn_up(-angle);
+    }
+}
+
 struct Vulkano {
     window: winit::window::Window,
     entry: Entry,
@@ -1466,9 +1569,11 @@ struct Vulkano {
     pipeline: Pipeline,
     pools: Pools,
     commandbuffers: Vec<vk::CommandBuffer>,
-    // buffers: Vec<Buffer>,
     models: Vec<Model<[f32; 3], InstanceData>>,
     allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>,
+    uniform_buffer: Buffer,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
 impl Vulkano {
@@ -1512,35 +1617,50 @@ impl Vulkano {
         let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_description)
             .expect("Failed to create allocator");
 
-        /* let data_1 = [
-            0.5f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.2f32, 0.0f32, 1.0f32, -0.5f32, 0.0f32,
-            0.0f32, 1.0f32, -0.9f32, -0.9f32, 0.0f32, 1.0f32, 0.3f32, -0.8f32, 0.0f32, 1.0f32,
-            0.0f32, -0.6f32, 0.0f32, 1.0f32,
-        ];
-        let mut buffer_1 =
-            Buffer::new(&logical_device, &mut allocator, size_of_val(&data_1) as u64);
-        buffer_1.fill(&data_1);
-
-        let data_2 = [
-            15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32,
-            15.0f32, 0.0f32, 1.0f32, 0.0f32, 1.0f32, 1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32,
-            1.0f32, 0.8f32, 0.7f32, 0.0f32, 1.0f32, 1.0f32, 0.0f32, 0.0f32, 1.0f32, 1.0f32,
-        ];
-        let mut buffer_2 =
-            Buffer::new(&logical_device, &mut allocator, size_of_val(&data_2) as u64);
-        buffer_2.fill(&data_2); */
-
         let commandbuffers =
             create_commandbuffers(&logical_device, &pools, swapchain.framebuffers.len())?;
-        /* fill_commandbuffers(
+
+        let mut uniform_buffer = Buffer::new(
             &logical_device,
-            &commandbuffers,
-            &renderpass,
-            &swapchain,
-            &pipeline,
-            &models, // &buffer_1.buffer,
-                     // &buffer_2.buffer,
-        )?; */
+            &mut allocator,
+            64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+        );
+        let camera_transform: [[f32; 4]; 4] = na::Matrix4::identity().into();
+        uniform_buffer.fill(&camera_transform);
+
+        let pool_sizes = [vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: swapchain.amount_of_images,
+        }];
+        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+            .max_sets(swapchain.amount_of_images)
+            .pool_sizes(&pool_sizes);
+        let descriptor_pool =
+            unsafe { logical_device.create_descriptor_pool(&descriptor_pool_info, None) }?;
+
+        let desc_layouts =
+            vec![pipeline.descriptor_set_layouts[0]; swapchain.amount_of_images as usize];
+        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&desc_layouts);
+        let descriptor_sets =
+            unsafe { logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info) }?;
+
+        for (i, descset) in descriptor_sets.iter().enumerate() {
+            let buffer_infos = [vk::DescriptorBufferInfo {
+                buffer: uniform_buffer.buffer,
+                offset: 0,
+                range: 64,
+            }];
+            let desc_sets_write = [vk::WriteDescriptorSet::builder()
+                .dst_set(*descset)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_infos)
+                .build()];
+            unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
+        }
 
         Ok(Vulkano {
             window,
@@ -1559,9 +1679,11 @@ impl Vulkano {
             pipeline,
             pools,
             commandbuffers,
-            // buffers: vec![buffer_1, buffer_2],
             models: vec![],
             allocator: std::mem::ManuallyDrop::new(allocator),
+            uniform_buffer,
+            descriptor_pool,
+            descriptor_sets,
         })
     }
 
@@ -1605,6 +1727,14 @@ impl Vulkano {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.pipeline,
             );
+            self.device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.layout,
+                0,
+                &[self.descriptor_sets[index]],
+                &[],
+            );
             for model in &self.models {
                 model.draw(&self.device, command_buffer);
             }
@@ -1621,6 +1751,10 @@ impl Drop for Vulkano {
             self.device
                 .device_wait_idle()
                 .expect("Something went wrong while waiting");
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.uniform_buffer
+                .cleanup(&self.device, &mut self.allocator);
             for m in &mut self.models {
                 if let Some(vb) = &mut m.vertex_buffer {
                     vb.cleanup(&self.device, &mut self.allocator);
@@ -1629,9 +1763,6 @@ impl Drop for Vulkano {
                     ib.cleanup(&self.device, &mut self.allocator);
                 }
             }
-            /* for buf in &mut self.buffers {
-                buf.cleanup(&self.device, &mut self.allocator);
-            } */
             std::mem::ManuallyDrop::drop(&mut self.allocator);
             self.pools.cleanup(&self.device);
             self.pipeline.cleanup(&self.device);
