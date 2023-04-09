@@ -11,7 +11,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_inner_size(PhysicalSize::<u32>::from((800, 600)))
         .with_title("Vulkano")
         .build(&event_loop)?;
+
     let mut vulkano = Vulkano::init(window)?;
+
+    let mut cube = Model::cube();
+    let mut angle = 0.2;
+    let spinny_cube = cube.insert_visibly(InstanceData {
+        model_matrix: (nalgebra::Matrix4::from_scaled_axis(nalgebra::Vector3::new(
+            0.0, 0.0, angle,
+        )) * nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(
+            0.0, 0.5, 0.0,
+        )) * nalgebra::Matrix4::new_scaling(0.1))
+        .into(),
+        color: [0.0, 0.5, 0.0],
+    });
+    cube.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
+        .unwrap();
+    cube.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+        .unwrap();
+    vulkano.models = vec![cube];
 
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
@@ -49,6 +67,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vulkano.swapchain.may_begin_drawing[vulkano.swapchain.current_image]
                     ])
                     .expect("Resetting fences");
+                for model in &mut vulkano.models {
+                    model
+                        .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+                        .unwrap();
+                }
+                vulkano
+                    .update_command_buffer(image_index as usize)
+                    .expect("Updating the command buffer");
             }
             let semaphores_available =
                 [vulkano.swapchain.image_available[vulkano.swapchain.current_image]];
@@ -89,6 +115,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (vulkano.swapchain.current_image + 1) % vulkano.swapchain.amount_of_images as usize;
         }
         Event::MainEventsCleared => {
+            angle += 0.01;
+            vulkano.models[0].get_mut(spinny_cube).unwrap().model_matrix =
+                (nalgebra::Matrix4::from_scaled_axis(nalgebra::Vector3::new(0.0, 0.0, angle))
+                    * nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(0.0, 0.5, 0.0))
+                    * nalgebra::Matrix4::new_scaling(0.1))
+                .into();
             vulkano.window.request_redraw();
         }
         _ => {}
@@ -297,7 +329,7 @@ fn create_commandbuffers(
     unsafe { logical_device.allocate_command_buffers(&commandbuffer_allocate_info) }
 }
 
-fn fill_commandbuffers(
+/* fn fill_commandbuffers(
     logical_device: &ash::Device,
     commandbuffers: &Vec<vk::CommandBuffer>,
     renderpass: &vk::RenderPass,
@@ -352,9 +384,9 @@ fn fill_commandbuffers(
             logical_device.cmd_end_render_pass(commandbuffer);
             logical_device.end_command_buffer(commandbuffer)?;
         }
-    }
+    }a
     Ok(())
-}
+} */
 
 struct Debug {
     loader: ash::extensions::ext::DebugUtils,
@@ -1337,25 +1369,25 @@ impl<V: std::fmt::Debug, I> Model<V, I> {
         }
     }
 
-    fn draw(&self, logical_device: &ash::Device, commandbuffer: vk::CommandBuffer) {
+    fn draw(&self, logical_device: &ash::Device, command_buffer: vk::CommandBuffer) {
         if let Some(vertexbuffer) = &self.vertex_buffer {
             if let Some(instancebuffer) = &self.instance_buffer {
                 if self.first_invisible > 0 {
                     unsafe {
                         logical_device.cmd_bind_vertex_buffers(
-                            commandbuffer,
+                            command_buffer,
                             0,
                             &[vertexbuffer.buffer],
                             &[0],
                         );
                         logical_device.cmd_bind_vertex_buffers(
-                            commandbuffer,
+                            command_buffer,
                             1,
                             &[instancebuffer.buffer],
                             &[0],
                         );
                         logical_device.cmd_draw(
-                            commandbuffer,
+                            command_buffer,
                             self.vertex_data.len() as u32,
                             self.first_invisible as u32,
                             0,
@@ -1381,7 +1413,7 @@ impl Model<[f32; 3], InstanceData> {
         let ltf = [-1.0, -1.0, 0.0];
         let ltb = [-1.0, -1.0, 2.0];
         let rbf = [1.0, 1.0, 0.0];
-        let rbb = [1.0, 0.1, 2.0];
+        let rbb = [1.0, 1.0, 2.0];
         let rtf = [1.0, -1.0, 0.0];
         let rtb = [1.0, -1.0, 2.0];
         Model {
@@ -1480,27 +1512,6 @@ impl Vulkano {
         let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_description)
             .expect("Failed to create allocator");
 
-        let mut cube = Model::cube();
-        cube.insert_visibly(InstanceData {
-            model_matrix: (nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(
-                0.05, 0.05, 0.0,
-            )) * nalgebra::Matrix4::new_scaling(0.1))
-            .into(),
-            color: [1.0, 1.0, 0.2],
-        });
-        cube.insert_visibly(InstanceData {
-            model_matrix: (nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(
-                0.0, 0.0, 0.1,
-            )) * nalgebra::Matrix4::new_scaling(0.1))
-            .into(),
-            color: [0.2, 0.4, 1.0],
-        });
-        cube.update_vertex_buffer(&logical_device, &mut allocator)
-            .unwrap();
-        cube.update_instance_buffer(&logical_device, &mut allocator)
-            .unwrap();
-        let models = vec![cube];
-
         /* let data_1 = [
             0.5f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.2f32, 0.0f32, 1.0f32, -0.5f32, 0.0f32,
             0.0f32, 1.0f32, -0.9f32, -0.9f32, 0.0f32, 1.0f32, 0.3f32, -0.8f32, 0.0f32, 1.0f32,
@@ -1521,7 +1532,7 @@ impl Vulkano {
 
         let commandbuffers =
             create_commandbuffers(&logical_device, &pools, swapchain.framebuffers.len())?;
-        fill_commandbuffers(
+        /* fill_commandbuffers(
             &logical_device,
             &commandbuffers,
             &renderpass,
@@ -1529,7 +1540,7 @@ impl Vulkano {
             &pipeline,
             &models, // &buffer_1.buffer,
                      // &buffer_2.buffer,
-        )?;
+        )?; */
 
         Ok(Vulkano {
             window,
@@ -1549,9 +1560,58 @@ impl Vulkano {
             pools,
             commandbuffers,
             // buffers: vec![buffer_1, buffer_2],
-            models,
+            models: vec![],
             allocator: std::mem::ManuallyDrop::new(allocator),
         })
+    }
+
+    fn update_command_buffer(&mut self, index: usize) -> Result<(), vk::Result> {
+        let command_buffer = self.commandbuffers[index];
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder();
+        unsafe {
+            self.device
+                .begin_command_buffer(command_buffer, &command_buffer_begin_info)?;
+        }
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.2, 0.2, 0.2, 1.0],
+                },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
+
+        let renderpass_being_info = vk::RenderPassBeginInfo::builder()
+            .render_pass(self.renderpass)
+            .framebuffer(self.swapchain.framebuffers[index])
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: self.swapchain.extent,
+            })
+            .clear_values(&clear_values);
+        unsafe {
+            self.device.cmd_begin_render_pass(
+                command_buffer,
+                &renderpass_being_info,
+                vk::SubpassContents::INLINE,
+            );
+            self.device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.pipeline,
+            );
+            for model in &self.models {
+                model.draw(&self.device, command_buffer);
+            }
+            self.device.cmd_end_render_pass(command_buffer);
+            self.device.end_command_buffer(command_buffer)?;
+        }
+        Ok(())
     }
 }
 
