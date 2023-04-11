@@ -39,74 +39,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut camera = Camera::default();
 
-    let mut cube = Model::cube();
-    cube.insert_visibly(InstanceData {
-        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.1))
-            * na::Matrix4::new_scaling(0.1))
-        .into(),
-        color: [0.2, 0.4, 1.0],
-    });
-    cube.insert_visibly(InstanceData {
-        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.05, 0.05, 0.0))
-            * na::Matrix4::new_scaling(0.1))
-        .into(),
-        color: [1.0, 1.0, 0.2],
-    });
-    for i in 0..10 {
-        for j in 0..10 {
-            cube.insert_visibly(InstanceData {
-                model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(
-                    i as f32 * 0.2 - 1.0,
-                    j as f32 * 0.2 - 1.0,
-                    0.5,
-                )) * na::Matrix4::new_scaling(0.03))
-                .into(),
-                color: [1.0, i as f32 * 0.07, j as f32 * 0.07],
-            });
-            cube.insert_visibly(InstanceData {
-                model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(
-                    i as f32 * 0.2 - 1.0,
-                    0.0,
-                    j as f32 * 0.2 - 1.0,
-                )) * na::Matrix4::new_scaling(0.02))
-                .into(),
-                color: [i as f32 * 0.07, j as f32 * 0.07, 1.0],
-            });
-        }
-    }
-    cube.insert_visibly(InstanceData {
-        model_matrix: (na::Matrix4::from_scaled_axis(na::Vector3::new(0.0, 0.0, 1.4))
-            * na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.5, 0.0))
-            * na::Matrix4::new_scaling(0.1))
-        .into(),
-        color: [0.0, 0.5, 0.0],
-    });
-    cube.insert_visibly(InstanceData {
-        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.5, 0.0, 0.0))
-            * na::Matrix4::new_nonuniform_scaling(&na::Vector3::new(0.5, 0.01, 0.01)))
-        .into(),
-        color: [1.0, 0.5, 0.5],
-    });
-    cube.insert_visibly(InstanceData {
-        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.5, 0.0))
-            * na::Matrix4::new_nonuniform_scaling(&na::Vector3::new(0.01, 0.5, 0.01)))
-        .into(),
-        color: [0.5, 1.0, 0.5],
-    });
-    cube.insert_visibly(InstanceData {
-        model_matrix: (na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0))
-            * na::Matrix4::new_nonuniform_scaling(&na::Vector3::new(0.01, 0.01, 0.5)))
-        .into(),
-        color: [0.5, 0.5, 1.0],
+    let mut sphere = Model::sphere(3);
+    sphere.insert_visibly(InstanceData {
+        model_matrix: na::Matrix4::new_scaling(0.5).into(),
+        color: [0.5, 0.0, 0.0],
     });
 
-    cube.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
+    sphere.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    cube.update_index_buffer(&vulkano.device, &mut vulkano.allocator)
+    sphere.update_index_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    cube.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+    sphere.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    vulkano.models = vec![cube];
+    vulkano.models = vec![sphere];
 
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
