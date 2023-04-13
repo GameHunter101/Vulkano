@@ -6,26 +6,26 @@ mod vulkan {
     pub mod buffer;
     pub mod camera;
     pub mod debug;
-    pub mod init_utils;
     pub mod model;
     pub mod pipeline;
     pub mod pools;
     pub mod queues;
     pub mod surface;
     pub mod swapchain;
+    pub mod utils;
     pub mod vulkano;
 }
 
 use vulkan::buffer::Buffer;
 use vulkan::camera::Camera;
 use vulkan::debug::Debug;
-use vulkan::init_utils::*;
 use vulkan::model::*;
 use vulkan::pipeline::Pipeline;
 use vulkan::pools::Pools;
 use vulkan::queues::*;
 use vulkan::surface::Surface;
 use vulkan::swapchain::Swapchain;
+use vulkan::utils::*;
 use vulkan::vulkano::Vulkano;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,16 +40,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut camera = Camera::default();
 
     let mut sphere = Model::sphere(3);
-    sphere.insert_visibly(InstanceData {
-        model_matrix: na::Matrix4::new_scaling(0.5).into(),
-        color: [0.5, 0.0, 0.0],
-    });
+    sphere.insert_visibly(InstanceData::from_matrix_and_color(
+        na::Matrix4::new_scaling(0.5).into(),
+        [0.5, 0.0, 0.0],
+    ));
 
-    sphere.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
+    sphere
+        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    sphere.update_index_buffer(&vulkano.device, &mut vulkano.allocator)
+    sphere
+        .update_index_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    sphere.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+    sphere
+        .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
     vulkano.models = vec![sphere];
 
@@ -83,6 +86,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     winit::event::VirtualKeyCode::PageDown => {
                         camera.turn_down(0.02);
+                    }
+                    winit::event::VirtualKeyCode::F11 => {
+                        screenshot(&vulkano).expect("Trouble taking screenshot");
                     }
                     _ => {}
                 }
@@ -177,3 +183,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     });
 }
+

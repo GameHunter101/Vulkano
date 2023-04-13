@@ -2,10 +2,12 @@ use ash::{vk, Instance};
 
 use crate::{QueueFamilies, Surface};
 
+use super::utils::create_image;
+
 pub struct Swapchain {
     pub swapchain_loader: ash::extensions::khr::Swapchain,
     pub swapchain: vk::SwapchainKHR,
-    _images: Vec<vk::Image>,
+    pub images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
     pub framebuffers: Vec<vk::Framebuffer>,
     pub surface_format: vk::SurfaceFormatKHR,
@@ -41,7 +43,7 @@ impl Swapchain {
             .image_color_space(surface_format.color_space)
             .image_extent(extent)
             .image_array_layers(1)
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .queue_family_indices(&queue_family_graphics)
             .pre_transform(surface_capabilities.current_transform)
@@ -100,7 +102,7 @@ impl Swapchain {
         Ok(Swapchain {
             swapchain_loader,
             swapchain,
-            _images: swapchain_images,
+            images: swapchain_images,
             image_views: swapchain_imageviews,
             framebuffers: vec![],
             surface_format,
@@ -192,7 +194,7 @@ impl DepthData {
             vk::ImageTiling::OPTIMAL,
             vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
         );
-        let (depth_image, depth_image_memory) = self.create_image(
+        let (depth_image, depth_image_memory) = create_image(
             logical_device,
             swapchain_extent.width,
             swapchain_extent.height,
@@ -239,91 +241,6 @@ impl DepthData {
             }
         }
         panic!("Failed to find supported format")
-    }
-
-    fn create_image(
-        &self,
-        logical_device: &ash::Device,
-        width: u32,
-        height: u32,
-        mip_levels: u32,
-        num_samples: vk::SampleCountFlags,
-        format: vk::Format,
-        tiling: vk::ImageTiling,
-        usage: vk::ImageUsageFlags,
-        required_memory_properties: vk::MemoryPropertyFlags,
-        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-    ) -> (vk::Image, vk::DeviceMemory) {
-        let image_create_info = vk::ImageCreateInfo {
-            s_type: vk::StructureType::IMAGE_CREATE_INFO,
-            p_next: std::ptr::null(),
-            flags: vk::ImageCreateFlags::empty(),
-            image_type: vk::ImageType::TYPE_2D,
-            format,
-            mip_levels,
-            array_layers: 1,
-            samples: num_samples,
-            tiling,
-            usage,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            queue_family_index_count: 0,
-            p_queue_family_indices: std::ptr::null(),
-            initial_layout: vk::ImageLayout::UNDEFINED,
-            extent: vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            },
-        };
-
-        let texture_image = unsafe {
-            logical_device
-                .create_image(&image_create_info, None)
-                .expect("Faield to create texture image")
-        };
-
-        let image_memory_requirement =
-            unsafe { logical_device.get_image_memory_requirements(texture_image) };
-        let memory_allocate_info = vk::MemoryAllocateInfo {
-            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
-            p_next: std::ptr::null(),
-            allocation_size: image_memory_requirement.size,
-            memory_type_index: self.find_memory_type(
-                image_memory_requirement.memory_type_bits,
-                required_memory_properties,
-                device_memory_properties,
-            ),
-        };
-
-        let texture_image_memory = unsafe {
-            logical_device
-                .allocate_memory(&memory_allocate_info, None)
-                .expect("Failed to allocate texture image memory")
-        };
-
-        unsafe {
-            logical_device
-                .bind_image_memory(texture_image, texture_image_memory, 0)
-                .expect("Failed to bind image memory")
-        };
-
-        (texture_image, texture_image_memory)
-    }
-
-    fn find_memory_type(
-        &self,
-        type_filter: u32,
-        required_properties: vk::MemoryPropertyFlags,
-        memory_properties: &vk::PhysicalDeviceMemoryProperties,
-    ) -> u32 {
-        for (i, memory_type) in memory_properties.memory_types.iter().enumerate() {
-            if (type_filter & (1 << i)) > 0
-                && memory_type.property_flags.contains(required_properties)
-            {
-                return i as u32;
-            }
-        }
-        panic!("Failed to find suitable memory type")
     }
 
     fn create_image_view(
