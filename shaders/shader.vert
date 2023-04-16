@@ -11,11 +11,13 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 projection_matrix;
 } ubo;
 
-layout(location = 0) out vec4 color_data_for_the_fragment_shader;
+layout(location = 0) out vec3 color_data_for_the_fragment_shader;
 layout(location = 1) out vec3 out_normal;
+layout(location = 2) out vec4 worldpos;
 
 void main() {
+    worldpos = model_matrix*vec4(position,1.0);
     gl_Position = ubo.projection_matrix * ubo.view_matrix * model_matrix * vec4(position, 1.0);
-    color_data_for_the_fragment_shader = vec4(color, 1.0);
+    color_data_for_the_fragment_shader = color;
     out_normal = transpose(mat3(inverse_model_matrix)) * normal;
 }
