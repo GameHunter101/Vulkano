@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sphere = Model::sphere(3);
     sphere.insert_visibly(InstanceData::from_matrix_and_color(
         na::Matrix4::new_scaling(0.5).into(),
-        [0.5, 0.0, 0.0],
+        [0.955, 0.638, 0.538],
     ));
 
     sphere
