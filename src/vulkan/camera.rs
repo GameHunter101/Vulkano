@@ -7,6 +7,7 @@ pub struct Camera {
     position: na::Vector3<f32>,
     view_direction: na::Unit<na::Vector3<f32>>,
     down_direction: na::Unit<na::Vector3<f32>>,
+    left_direction: na::Unit<na::Vector3<f32>>,
     fovy: f32,
     aspect: f32,
     near: f32,
@@ -21,6 +22,7 @@ impl Default for Camera {
             position: na::Vector3::new(0.0, -3.0, -3.0),
             view_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, 1.0)),
             down_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, -1.0)),
+            left_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, 0.0)),
             fovy: std::f32::consts::FRAC_PI_3,
             aspect: 800.0 / 600.0,
             near: 0.1,
@@ -33,6 +35,7 @@ impl Default for Camera {
     }
 }
 
+#[allow(dead_code)]
 impl Camera {
     pub fn update_buffer(&self, buffer: &mut Buffer) {
         let data: [[[f32; 4]; 4]; 2] = [self.view_matrix.into(), self.projection_matrix.into()];
@@ -59,6 +62,11 @@ impl Camera {
             0.0,
             1.0,
         );
+        self.left_direction = na::Unit::new_normalize(
+            na::Vector3::new(0.0, -1.0, 0.0).cross(self.view_direction.as_ref()),
+        );
+        self.down_direction =
+            na::Unit::new_normalize(self.left_direction.cross(self.view_direction.as_ref()));
         self.view_matrix = matrix;
     }
 
@@ -93,6 +101,17 @@ impl Camera {
         self.move_forward(-distance);
     }
 
+    pub fn move_right(&mut self, distance: f32) {
+        let rotation = na::Rotation3::from_axis_angle(&self.down_direction, 90.0);
+        let rotated_view = rotation * self.view_direction.as_ref();
+        self.position += distance * rotated_view;
+        self.update_view_matrix();
+    }
+
+    pub fn move_left(&mut self, distance: f32) {
+        self.move_right(-distance);
+    }
+
     pub fn turn_right(&mut self, angle: f32) {
         let rotation = na::Rotation3::from_axis_angle(&self.down_direction, angle);
         self.view_direction = rotation * self.view_direction;
@@ -113,5 +132,10 @@ impl Camera {
 
     pub fn turn_down(&mut self, angle: f32) {
         self.turn_up(-angle);
+    }
+
+    pub fn set_aspect(&mut self, aspect: f32) {
+        self.aspect = aspect;
+        self.update_projection_matrix();
     }
 }

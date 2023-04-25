@@ -24,7 +24,7 @@ pub struct Vulkano {
     pub physical_device: vk::PhysicalDevice,
     _physical_device_properties: vk::PhysicalDeviceProperties,
     _physical_device_features: vk::PhysicalDeviceFeatures,
-    _queue_families: QueueFamilies,
+    queue_families: QueueFamilies,
     pub queues: Queues,
     pub device: ash::Device,
     pub swapchain: Swapchain,
@@ -36,7 +36,9 @@ pub struct Vulkano {
     pub allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>,
     pub uniform_buffer: Buffer,
     descriptor_pool: vk::DescriptorPool,
-    descriptor_sets: Vec<vk::DescriptorSet>,
+    descriptor_sets_camera: Vec<vk::DescriptorSet>,
+    pub descriptor_sets_light: Vec<vk::DescriptorSet>,
+    pub light_buffer: Buffer,
 }
 
 impl Vulkano {
@@ -88,40 +90,80 @@ impl Vulkano {
             128,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         );
+
+        let mut light_buffer = Buffer::new(
+            &logical_device,
+            &mut allocator,
+            144,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        );
+
         let camera_transform: [[[f32; 4]; 4]; 2] = [
             na::Matrix4::identity().into(),
             na::Matrix4::identity().into(),
         ];
-        uniform_buffer.fill(&camera_transform);
 
-        let pool_sizes = [vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: swapchain.amount_of_images,
-        }];
+        uniform_buffer.fill(&camera_transform);
+        light_buffer.fill(&[0.0, 0.0]);
+
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: swapchain.amount_of_images,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: swapchain.amount_of_images,
+            },
+        ];
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets(swapchain.amount_of_images)
+            .max_sets(2 * swapchain.amount_of_images)
             .pool_sizes(&pool_sizes);
         let descriptor_pool =
             unsafe { logical_device.create_descriptor_pool(&descriptor_pool_info, None) }?;
 
-        let desc_layouts =
+        let desc_layouts_camera =
             vec![pipeline.descriptor_set_layouts[0]; swapchain.amount_of_images as usize];
-        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+        let descriptor_set_allocate_info_camera = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&desc_layouts);
-        let descriptor_sets =
-            unsafe { logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info) }?;
+            .set_layouts(&desc_layouts_camera);
+        let descriptor_sets_camera = unsafe {
+            logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_camera)
+        }?;
 
-        for descriptor_set in descriptor_sets.iter() {
+        for descset in &descriptor_sets_camera {
             let buffer_infos = [vk::DescriptorBufferInfo {
                 buffer: uniform_buffer.buffer,
                 offset: 0,
                 range: 128,
             }];
             let desc_sets_write = [vk::WriteDescriptorSet::builder()
-                .dst_set(*descriptor_set)
+                .dst_set(*descset)
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_infos)
+                .build()];
+            unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
+        }
+        let desc_layouts_light =
+            vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
+        let descriptor_set_allocate_info_light = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&desc_layouts_light);
+        let descriptor_sets_light = unsafe {
+            logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_light)
+        }?;
+
+        for descset in &descriptor_sets_light {
+            let buffer_infos = [vk::DescriptorBufferInfo {
+                buffer: light_buffer.buffer,
+                offset: 0,
+                range: 8,
+            }];
+            let desc_sets_write = [vk::WriteDescriptorSet::builder()
+                .dst_set(*descset)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(&buffer_infos)
                 .build()];
             unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
@@ -136,7 +178,7 @@ impl Vulkano {
             physical_device,
             _physical_device_properties: physical_device_properties,
             _physical_device_features: physical_device_features,
-            _queue_families: queue_families,
+            queue_families,
             queues,
             device: logical_device,
             swapchain,
@@ -148,7 +190,9 @@ impl Vulkano {
             allocator: std::mem::ManuallyDrop::new(allocator),
             uniform_buffer,
             descriptor_pool,
-            descriptor_sets,
+            descriptor_sets_camera,
+            descriptor_sets_light,
+            light_buffer,
         })
     }
 
@@ -197,7 +241,10 @@ impl Vulkano {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout,
                 0,
-                &[self.descriptor_sets[index]],
+                &[
+                    self.descriptor_sets_camera[index],
+                    self.descriptor_sets_light[index],
+                ],
                 &[],
             );
             for model in &self.models {
@@ -206,6 +253,29 @@ impl Vulkano {
             self.device.cmd_end_render_pass(command_buffer);
             self.device.end_command_buffer(command_buffer)?;
         }
+        Ok(())
+    }
+
+    pub fn recreate_swapchain(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        unsafe {
+            self.device
+                .device_wait_idle()
+                .expect("Something wrong while waiting");
+        }
+        unsafe {
+            self.swapchain.cleanup(&self.device);
+        }
+        self.swapchain = Swapchain::init(
+            &self.instance,
+            &self.surfaces,
+            self.physical_device,
+            &self.device,
+            &self.queue_families,
+        )?;
+        self.swapchain
+            .create_framebuffers(&self.device, self.renderpass)?;
+        self.pipeline.cleanup(&self.device);
+        self.pipeline = Pipeline::init(&self.device, &self.swapchain, &self.renderpass)?;
         Ok(())
     }
 }
@@ -218,6 +288,7 @@ impl Drop for Vulkano {
                 .expect("Something went wrong while waiting");
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.light_buffer.cleanup(&self.device, &mut self.allocator);
             self.uniform_buffer
                 .cleanup(&self.device, &mut self.allocator);
             for model in &mut self.models {

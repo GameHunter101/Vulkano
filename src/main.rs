@@ -6,6 +6,7 @@ mod vulkan {
     pub mod buffer;
     pub mod camera;
     pub mod debug;
+    pub mod light;
     pub mod model;
     pub mod pipeline;
     pub mod pools;
@@ -19,6 +20,7 @@ mod vulkan {
 use vulkan::buffer::Buffer;
 use vulkan::camera::Camera;
 use vulkan::debug::Debug;
+use vulkan::light::*;
 use vulkan::model::*;
 use vulkan::pipeline::Pipeline;
 use vulkan::pools::Pools;
@@ -40,10 +42,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut camera = Camera::default();
 
     let mut sphere = Model::sphere(3);
-    sphere.insert_visibly(InstanceData::from_matrix_and_color(
-        na::Matrix4::new_scaling(0.5).into(),
-        [0.955, 0.638, 0.538],
-    ));
+    let mut lights = LightManager::default();
+
+    for i in 0..10 {
+        for j in 0..10 {
+            sphere.insert_visibly(InstanceData::from_matrix_and_properties(
+                na::Matrix4::new_translation(&na::Vector3::new(i as f32 - 5., j as f32 + 5., 10.0))
+                    * na::Matrix4::new_scaling(0.5),
+                [0., 0., 0.8],
+                i as f32 * 0.1,
+                j as f32 * 0.1,
+            ));
+        }
+    }
+
+    lights.add_light(DirectionalLight {
+        direction: na::Vector3::new(-1., -1., 0.),
+        illuminance: [10.1, 10.1, 10.1],
+    });
+    lights.add_light(PointLight {
+        position: na::Point3::new(0.1, -3.0, -3.0),
+        luminous_flux: [100.0, 100.0, 100.0],
+    });
+    lights.add_light(PointLight {
+        position: na::Point3::new(0.1, -3.0, -3.0),
+        luminous_flux: [100.0, 100.0, 100.0],
+    });
+    lights.add_light(PointLight {
+        position: na::Point3::new(0.1, -3.0, -3.0),
+        luminous_flux: [100.0, 100.0, 100.0],
+    });
+
+    lights.update_buffer(
+        &vulkano.device,
+        &mut vulkano.light_buffer,
+        &mut vulkano.descriptor_sets_light,
+    );
 
     sphere
         .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
@@ -56,8 +90,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     vulkano.models = vec![sphere];
 
+    let mut mouse_pos: Option<winit::dpi::PhysicalPosition<f64>> = None;
+
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
+        Event::WindowEvent {
+            event: WindowEvent::CursorLeft { .. },
+            ..
+        } => {
+            mouse_pos = None;
+        }
+
+        Event::WindowEvent {
+            event: WindowEvent::CursorMoved { position, .. },
+            ..
+        } => {
+            if let Some(mouse_pos) = mouse_pos {
+                camera.turn_right(((position.x - mouse_pos.x) * 0.01) as f32);
+                camera.turn_up(((mouse_pos.y - position.y) * 0.01) as f32);
+            }
+            mouse_pos = Some(position);
+        }
+
         Event::WindowEvent {
             event: WindowEvent::KeyboardInput { input, .. },
             ..
@@ -68,24 +122,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..
             } = input
             {
+                let distance = 0.1;
                 match keycode {
-                    winit::event::VirtualKeyCode::Right => {
-                        camera.turn_right(0.1);
+                    winit::event::VirtualKeyCode::W => {
+                        camera.move_forward(distance);
                     }
-                    winit::event::VirtualKeyCode::Left => {
-                        camera.turn_left(0.1);
+                    winit::event::VirtualKeyCode::S => {
+                        camera.move_backward(distance);
                     }
-                    winit::event::VirtualKeyCode::Up => {
-                        camera.move_forward(0.05);
+                    winit::event::VirtualKeyCode::A => {
+                        camera.move_left(distance);
                     }
-                    winit::event::VirtualKeyCode::Down => {
-                        camera.move_backward(0.05);
-                    }
-                    winit::event::VirtualKeyCode::PageUp => {
-                        camera.turn_up(0.02);
-                    }
-                    winit::event::VirtualKeyCode::PageDown => {
-                        camera.turn_down(0.02);
+                    winit::event::VirtualKeyCode::D => {
+                        camera.move_right(distance);
                     }
                     winit::event::VirtualKeyCode::F11 => {
                         screenshot(&vulkano).expect("Trouble taking screenshot");
@@ -168,11 +217,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .swapchains(&swapchains)
                 .image_indices(&indices);
             unsafe {
-                vulkano
+                match vulkano
                     .swapchain
                     .swapchain_loader
                     .queue_present(vulkano.queues.graphics_queue, &present_info)
-                    .expect("Presenting to queue");
+                {
+                    Ok(..) => {}
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                        vulkano.recreate_swapchain().expect("Swapchain recreation");
+                        camera.set_aspect(
+                            vulkano.swapchain.extent.width as f32
+                                / vulkano.swapchain.extent.height as f32,
+                        );
+                        camera.update_buffer(&mut vulkano.uniform_buffer);
+                    }
+                    _ => {
+                        panic!("Unhandled queue presentation error");
+                    }
+                }
             }
             vulkano.swapchain.current_image =
                 (vulkano.swapchain.current_image + 1) % vulkano.swapchain.amount_of_images as usize;
@@ -183,4 +245,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     });
 }
-
