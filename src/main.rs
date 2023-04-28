@@ -13,6 +13,7 @@ mod vulkan {
     pub mod queues;
     pub mod surface;
     pub mod swapchain;
+    pub mod texture;
     pub mod utils;
     pub mod vulkano;
 }
@@ -30,6 +31,8 @@ use vulkan::swapchain::Swapchain;
 use vulkan::utils::*;
 use vulkan::vulkano::Vulkano;
 
+use crate::vulkan::texture::Texture;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = winit::event_loop::EventLoop::new();
     let window = WindowBuilder::new()
@@ -41,10 +44,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut camera = Camera::default();
 
-    let mut sphere = Model::sphere(3);
+    let texture = Texture::from_file(
+        "./gfx/dude.png",
+        &vulkano.instance,
+        &vulkano.device,
+        vulkano.physical_device,
+        &mut vulkano.allocator,
+        vulkano.pools.command_pool_graphics,
+        vulkano.queues.graphics_queue,
+    )?;
+
+    let mut quad = Model::quad();
     let mut lights = LightManager::default();
 
-    for i in 0..10 {
+    /* for i in 0..10 {
         for j in 0..10 {
             sphere.insert_visibly(InstanceData::from_matrix_and_properties(
                 na::Matrix4::new_translation(&na::Vector3::new(i as f32 - 5., j as f32 + 5., 10.0))
@@ -54,7 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 j as f32 * 0.1,
             ));
         }
-    }
+    } */
+
+    quad.insert_visibly(TexturedInstanceData::from_matrix(
+        na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0)),
+    ));
 
     lights.add_light(DirectionalLight {
         direction: na::Vector3::new(-1., -1., 0.),
@@ -79,16 +96,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut vulkano.descriptor_sets_light,
     );
 
-    sphere
-        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
+    quad.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    sphere
-        .update_index_buffer(&vulkano.device, &mut vulkano.allocator)
+    quad.update_index_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    sphere
-        .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+    quad.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    vulkano.models = vec![sphere];
+    vulkano.models = vec![quad];
 
     let mut mouse_pos: Option<winit::dpi::PhysicalPosition<f64>> = None;
 
@@ -184,6 +198,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
                         .unwrap();
                 }
+
+                let imageinfo = vk::DescriptorImageInfo {
+                    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    image_view: texture.image_view,
+                    sampler: texture.sampler,
+                    ..Default::default()
+                };
+                let descriptorwrite_image = vk::WriteDescriptorSet {
+                    dst_set: vulkano.descriptor_sets_texture[vulkano.swapchain.current_image],
+                    dst_binding: 0,
+                    dst_array_element: 0,
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    descriptor_count: 1,
+                    p_image_info: [imageinfo].as_ptr(),
+                    ..Default::default()
+                };
+    
+                    vulkano
+                        .device
+                        .update_descriptor_sets(&[descriptorwrite_image], &[]);
+                
+
                 vulkano
                     .update_command_buffer(image_index as usize)
                     .expect("Updating the command buffer");

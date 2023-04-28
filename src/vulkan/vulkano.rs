@@ -15,6 +15,9 @@ use crate::{
 };
 use crate::{InstanceData, Model, VertexData};
 
+use super::model::TexturedInstanceData;
+use super::model::TexturedVertexData;
+
 pub struct Vulkano {
     pub window: winit::window::Window,
     _entry: Entry,
@@ -32,12 +35,13 @@ pub struct Vulkano {
     pub pipeline: Pipeline,
     pub pools: Pools,
     pub commandbuffers: Vec<vk::CommandBuffer>,
-    pub models: Vec<Model<VertexData, InstanceData>>,
+    pub models: Vec<Model<TexturedVertexData, TexturedInstanceData>>,
     pub allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>,
     pub uniform_buffer: Buffer,
     descriptor_pool: vk::DescriptorPool,
     descriptor_sets_camera: Vec<vk::DescriptorSet>,
     pub descriptor_sets_light: Vec<vk::DescriptorSet>,
+    pub descriptor_sets_texture: Vec<vk::DescriptorSet>,
     pub light_buffer: Buffer,
 }
 
@@ -67,7 +71,7 @@ impl Vulkano {
         let renderpass = init_renderpass(&logical_device, swapchain.surface_format.format)?;
         swapchain.create_framebuffers(&logical_device, renderpass)?;
 
-        let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
+        let pipeline = Pipeline::init_textured(&logical_device, &swapchain, &renderpass)?;
         let pools = Pools::init(&logical_device, &queue_families)?;
 
         let allocator_create_description = gpu_allocator::vulkan::AllocatorCreateDesc {
@@ -115,6 +119,10 @@ impl Vulkano {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
                 descriptor_count: swapchain.amount_of_images,
             },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: swapchain.amount_of_images,
+            },
         ];
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(2 * swapchain.amount_of_images)
@@ -145,7 +153,7 @@ impl Vulkano {
                 .build()];
             unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
         }
-        let desc_layouts_light =
+        /* let desc_layouts_light =
             vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
         let descriptor_set_allocate_info_light = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
@@ -167,7 +175,16 @@ impl Vulkano {
                 .buffer_info(&buffer_infos)
                 .build()];
             unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
-        }
+        } */
+
+        let desc_layouts_texture =
+            vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
+        let descriptor_set_allocate_info_texture = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&desc_layouts_texture);
+        let descriptor_sets_texture = unsafe {
+            logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
+        }?;
 
         Ok(Vulkano {
             window,
@@ -191,7 +208,8 @@ impl Vulkano {
             uniform_buffer,
             descriptor_pool,
             descriptor_sets_camera,
-            descriptor_sets_light,
+            descriptor_sets_light: vec![],
+            descriptor_sets_texture,
             light_buffer,
         })
     }
@@ -243,7 +261,8 @@ impl Vulkano {
                 0,
                 &[
                     self.descriptor_sets_camera[index],
-                    self.descriptor_sets_light[index],
+                    // self.descriptor_sets_light[index],
+                    self.descriptor_sets_texture[index],
                 ],
                 &[],
             );
@@ -275,7 +294,7 @@ impl Vulkano {
         self.swapchain
             .create_framebuffers(&self.device, self.renderpass)?;
         self.pipeline.cleanup(&self.device);
-        self.pipeline = Pipeline::init(&self.device, &self.swapchain, &self.renderpass)?;
+        self.pipeline = Pipeline::init_textured(&self.device, &self.swapchain, &self.renderpass)?;
         Ok(())
     }
 }
