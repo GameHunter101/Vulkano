@@ -17,6 +17,8 @@ use crate::{InstanceData, Model, VertexData};
 
 use super::model::TexturedInstanceData;
 use super::model::TexturedVertexData;
+use super::pipeline;
+use super::texture::TextureStorage;
 
 pub struct Vulkano {
     pub window: winit::window::Window,
@@ -43,6 +45,7 @@ pub struct Vulkano {
     pub descriptor_sets_light: Vec<vk::DescriptorSet>,
     pub descriptor_sets_texture: Vec<vk::DescriptorSet>,
     pub light_buffer: Buffer,
+    pub texture_storage: TextureStorage,
 }
 
 impl Vulkano {
@@ -71,7 +74,7 @@ impl Vulkano {
         let renderpass = init_renderpass(&logical_device, swapchain.surface_format.format)?;
         swapchain.create_framebuffers(&logical_device, renderpass)?;
 
-        let pipeline = Pipeline::init_textured(&logical_device, &swapchain, &renderpass)?;
+        // let pipeline = Pipeline::init_textured(&logical_device, &swapchain, &renderpass)?;
         let pools = Pools::init(&logical_device, &queue_families)?;
 
         let allocator_create_description = gpu_allocator::vulkan::AllocatorCreateDesc {
@@ -121,14 +124,17 @@ impl Vulkano {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: swapchain.amount_of_images,
+                descriptor_count: pipeline::MAXIMAL_NUMBER_OF_TEXTURES * swapchain.amount_of_images,
             },
         ];
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets(2 * swapchain.amount_of_images)
+            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND_EXT)
+            .max_sets(pipeline::MAXIMAL_NUMBER_OF_TEXTURES * pool_sizes.len() as u32)
             .pool_sizes(&pool_sizes);
         let descriptor_pool =
             unsafe { logical_device.create_descriptor_pool(&descriptor_pool_info, None) }?;
+
+        let pipeline = Pipeline::init_textured(&logical_device, &swapchain, &renderpass)?;
 
         let desc_layouts_camera =
             vec![pipeline.descriptor_set_layouts[0]; swapchain.amount_of_images as usize];
@@ -179,9 +185,15 @@ impl Vulkano {
 
         let desc_layouts_texture =
             vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
+        let descriptor_counts =
+            vec![pipeline::MAXIMAL_NUMBER_OF_TEXTURES; swapchain.amount_of_images as usize];
+        let mut count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfoEXT::builder()
+            .descriptor_counts(&descriptor_counts);
         let descriptor_set_allocate_info_texture = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&desc_layouts_texture);
+            .set_layouts(&desc_layouts_texture)
+            .push_next(&mut count_info);
+
         let descriptor_sets_texture = unsafe {
             logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
         }?;
@@ -211,6 +223,7 @@ impl Vulkano {
             descriptor_sets_light: vec![],
             descriptor_sets_texture,
             light_buffer,
+            texture_storage: TextureStorage::new(),
         })
     }
 
@@ -297,6 +310,21 @@ impl Vulkano {
         self.pipeline = Pipeline::init_textured(&self.device, &self.swapchain, &self.renderpass)?;
         Ok(())
     }
+
+    pub fn new_texture_from_file<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        self.texture_storage.new_texture_from_file(
+            path,
+            &self.instance,
+            &self.device,
+            self.physical_device,
+            &mut self.allocator,
+            self.pools.command_pool_graphics,
+            self.queues.graphics_queue,
+        )
+    }
 }
 
 impl Drop for Vulkano {
@@ -305,6 +333,7 @@ impl Drop for Vulkano {
             self.device
                 .device_wait_idle()
                 .expect("Something went wrong while waiting");
+            self.texture_storage.cleanup(&self.device);
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.light_buffer.cleanup(&self.device, &mut self.allocator);

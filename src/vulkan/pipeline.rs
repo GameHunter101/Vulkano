@@ -4,6 +4,8 @@ use ash::vk;
 
 use crate::Swapchain;
 
+pub const MAXIMAL_NUMBER_OF_TEXTURES:u32 = 1024;
+
 pub struct Pipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
@@ -333,6 +335,12 @@ impl Pipeline {
                 offset: 112,
                 format: vk::Format::R32G32B32A32_SFLOAT,
             },
+            vk::VertexInputAttributeDescription {
+                binding: 1,
+                location: 10,
+                offset: 128,
+                format: vk::Format::R8G8B8A8_UINT,
+            },
         ];
         let vertex_binding_descs = [
             vk::VertexInputBindingDescription {
@@ -342,7 +350,7 @@ impl Pipeline {
             },
             vk::VertexInputBindingDescription {
                 binding: 1,
-                stride: 128,
+                stride: 132,
                 input_rate: vk::VertexInputRate::INSTANCE,
             },
         ];
@@ -410,16 +418,26 @@ impl Pipeline {
         let descriptorset_layout_binding_descs1 = [vk::DescriptorSetLayoutBinding::builder()
             .binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
+            .descriptor_count(MAXIMAL_NUMBER_OF_TEXTURES)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .build()];
+        let descriptor_binding_flags = [vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT
+            | vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT
+            | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND_EXT];
+        let mut descriptorset_layout_binding_flags =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
+                .binding_flags(&descriptor_binding_flags);
+
         let descriptorset_layout_info1 = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&descriptorset_layout_binding_descs1);
+            .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL_EXT)
+            .bindings(&descriptorset_layout_binding_descs1)
+            .push_next(&mut descriptorset_layout_binding_flags);
         let descriptor_set_layout1 = unsafe {
             logical_device.create_descriptor_set_layout(&descriptorset_layout_info1, None)
         }?;
 
         let desclayouts = vec![descriptor_set_layout0, descriptor_set_layout1];
+
         let pipelinelayout_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&desclayouts);
         let pipelinelayout =
             unsafe { logical_device.create_pipeline_layout(&pipelinelayout_info, None) }?;

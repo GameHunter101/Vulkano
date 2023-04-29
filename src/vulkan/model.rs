@@ -505,6 +505,7 @@ pub struct TexturedVertexData {
 pub struct TexturedInstanceData {
     pub model_matrix: [[f32; 4]; 4],
     pub inverse_model_matrix: [[f32; 4]; 4],
+    pub texture_id: u32,
 }
 
 impl TexturedInstanceData {
@@ -512,6 +513,18 @@ impl TexturedInstanceData {
         TexturedInstanceData {
             model_matrix: model_matrix.into(),
             inverse_model_matrix: model_matrix.try_inverse().unwrap().into(),
+            texture_id: 0,
+        }
+    }
+
+    pub fn from_matrix_and_texture(
+        model_matrix: na::Matrix4<f32>,
+        texture_id: usize,
+    ) -> TexturedInstanceData {
+        TexturedInstanceData {
+            model_matrix: model_matrix.into(),
+            inverse_model_matrix: model_matrix.try_inverse().unwrap().into(),
+            texture_id: texture_id as u32,
         }
     }
 }

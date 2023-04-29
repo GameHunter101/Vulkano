@@ -182,3 +182,62 @@ impl Texture {
         })
     }
 }
+
+pub struct TextureStorage {
+    textures: Vec<Texture>,
+}
+
+impl TextureStorage {
+    pub fn new() -> Self {
+        TextureStorage { textures: vec![] }
+    }
+    pub unsafe fn cleanup(&mut self, logical_device: &ash::Device) {
+        for texture in &self.textures {
+            logical_device.destroy_image(texture.vk_image, None);
+            logical_device.free_memory(texture.vk_image_memory, None);
+            logical_device.destroy_image_view(texture.image_view, None);
+            logical_device.destroy_sampler(texture.sampler, None);
+        }
+    }
+    pub fn new_texture_from_file<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+        instance: &ash::Instance,
+        logical_device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+        command_pool_graphics: vk::CommandPool,
+        graphics_queue: vk::Queue,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let new_texture = Texture::from_file(
+            path,
+            instance,
+            logical_device,
+            physical_device,
+            allocator,
+            command_pool_graphics,
+            graphics_queue,
+        )?;
+        let new_id = self.textures.len();
+        self.textures.push(new_texture);
+        Ok(new_id)
+    }
+    pub fn get(&self, index: usize) -> Option<&Texture> {
+        self.textures.get(index)
+    }
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Texture> {
+        self.textures.get_mut(index)
+    }
+
+    pub fn get_descriptor_image_info(&self) -> Vec<vk::DescriptorImageInfo> {
+        self.textures
+            .iter()
+            .map(|t| vk::DescriptorImageInfo {
+                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                image_view: t.image_view,
+                sampler: t.sampler,
+                ..Default::default()
+            })
+            .collect()
+    }
+}

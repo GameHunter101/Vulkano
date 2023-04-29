@@ -31,8 +31,6 @@ use vulkan::swapchain::Swapchain;
 use vulkan::utils::*;
 use vulkan::vulkano::Vulkano;
 
-use crate::vulkan::texture::Texture;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = winit::event_loop::EventLoop::new();
     let window = WindowBuilder::new()
@@ -44,15 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut camera = Camera::default();
 
-    let texture = Texture::from_file(
-        "./gfx/dude.png",
-        &vulkano.instance,
-        &vulkano.device,
-        vulkano.physical_device,
-        &mut vulkano.allocator,
-        vulkano.pools.command_pool_graphics,
-        vulkano.queues.graphics_queue,
-    )?;
+    let mut texture_id = vulkano.new_texture_from_file("./gfx/dude.png")?;
+
+    let mut second_texture_id = vulkano.new_texture_from_file("./gfx/xdd.png")?;
+
+    let third_texture_id = vulkano.new_texture_from_file("./gfx/newLogo.png")?;
 
     let mut quad = Model::quad();
     let mut lights = LightManager::default();
@@ -69,8 +63,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } */
 
-    quad.insert_visibly(TexturedInstanceData::from_matrix(
+    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
         na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0)),
+        texture_id,
+    ));
+
+    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
+        na::Matrix4::new_translation(&na::Vector3::new(2.0, 0.0, 0.3)),
+        second_texture_id,
+    ));
+
+    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
+        na::Matrix4::new_translation(&na::Vector3::new(-0.5, 0.0, -0.3)),
+        third_texture_id,
     ));
 
     lights.add_light(DirectionalLight {
@@ -153,6 +158,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     winit::event::VirtualKeyCode::F11 => {
                         screenshot(&vulkano).expect("Trouble taking screenshot");
                     }
+                    winit::event::VirtualKeyCode::F10 => {
+                        std::mem::swap(&mut texture_id, &mut second_texture_id);
+                    }
                     _ => {}
                 }
             }
@@ -199,26 +207,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap();
                 }
 
-                let imageinfo = vk::DescriptorImageInfo {
-                    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    image_view: texture.image_view,
-                    sampler: texture.sampler,
-                    ..Default::default()
-                };
-                let descriptorwrite_image = vk::WriteDescriptorSet {
-                    dst_set: vulkano.descriptor_sets_texture[vulkano.swapchain.current_image],
-                    dst_binding: 0,
-                    dst_array_element: 0,
-                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    descriptor_count: 1,
-                    p_image_info: [imageinfo].as_ptr(),
-                    ..Default::default()
-                };
-    
-                    vulkano
-                        .device
-                        .update_descriptor_sets(&[descriptorwrite_image], &[]);
-                
+                let imageinfos = vulkano.texture_storage.get_descriptor_image_info();
+                let descriptorwrite_image = vk::WriteDescriptorSet::builder()
+                    .dst_set(vulkano.descriptor_sets_texture[vulkano.swapchain.current_image])
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&imageinfos)
+                    .build();
+
+                vulkano
+                    .device
+                    .update_descriptor_sets(&[descriptorwrite_image], &[]);
 
                 vulkano
                     .update_command_buffer(image_index as usize)
