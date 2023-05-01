@@ -13,15 +13,17 @@ use crate::{
     create_commandbuffers, init_device_and_queues, init_instance,
     init_physical_device_and_properties, init_renderpass,
 };
-use crate::{InstanceData, Model, VertexData};
+
+use crate::Model;
 
 use super::model::TexturedInstanceData;
 use super::model::TexturedVertexData;
 use super::pipeline;
+use super::text::AllText;
 use super::texture::TextureStorage;
 
 pub struct Vulkano {
-    pub window: winit::window::Window,
+    // pub window: winit::window::Window,
     _entry: Entry,
     pub instance: Instance,
     pub debug: std::mem::ManuallyDrop<Debug>,
@@ -46,16 +48,17 @@ pub struct Vulkano {
     pub descriptor_sets_texture: Vec<vk::DescriptorSet>,
     pub light_buffer: Buffer,
     pub texture_storage: TextureStorage,
+    pub text: AllText,
 }
 
 impl Vulkano {
-    pub fn init(window: winit::window::Window) -> Result<Vulkano, Box<dyn std::error::Error>> {
+    pub fn init(window: &winit::window::Window) -> Result<Vulkano, Box<dyn std::error::Error>> {
         let entry = unsafe { Entry::load()? };
 
         let layer_names = vec!["VK_LAYER_KHRONOS_validation"];
         let instance = init_instance(&entry, &layer_names)?;
         let debug = Debug::init(&entry, &instance)?;
-        let surfaces = Surface::init(&window, &entry, &instance)?;
+        let surfaces = Surface::init(window, &entry, &instance)?;
 
         let (physical_device, physical_device_properties, physical_device_features) =
             init_physical_device_and_properties(&instance)?;
@@ -198,8 +201,10 @@ impl Vulkano {
             logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
         }?;
 
+        let text = AllText::new("./fonts/ARIAL.TTF")?;
+
         Ok(Vulkano {
-            window,
+            // window,
             _entry: entry,
             instance,
             debug: std::mem::ManuallyDrop::new(debug),
@@ -224,6 +229,7 @@ impl Vulkano {
             descriptor_sets_texture,
             light_buffer,
             texture_storage: TextureStorage::new(),
+            text,
         })
     }
 
@@ -282,6 +288,7 @@ impl Vulkano {
             for model in &self.models {
                 model.draw(&self.device, command_buffer);
             }
+            self.text.draw(&self.device, command_buffer, index);
             self.device.cmd_end_render_pass(command_buffer);
             self.device.end_command_buffer(command_buffer)?;
         }
@@ -308,6 +315,79 @@ impl Vulkano {
             .create_framebuffers(&self.device, self.renderpass)?;
         self.pipeline.cleanup(&self.device);
         self.pipeline = Pipeline::init_textured(&self.device, &self.swapchain, &self.renderpass)?;
+
+        unsafe {
+            self.device.reset_descriptor_pool(
+                self.descriptor_pool,
+                ash::vk::DescriptorPoolResetFlags::empty(),
+            )?;
+        }
+
+        let desc_layouts_camera =
+            vec![self.pipeline.descriptor_set_layouts[0]; self.swapchain.amount_of_images as usize];
+        let descriptor_set_allocate_info_camera = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.descriptor_pool)
+            .set_layouts(&desc_layouts_camera);
+        self.descriptor_sets_camera = unsafe {
+            self.device.allocate_descriptor_sets(&descriptor_set_allocate_info_camera)
+        }?;
+
+        for descset in &self.descriptor_sets_camera {
+            let buffer_infos = [vk::DescriptorBufferInfo {
+                buffer: self.uniform_buffer.buffer,
+                offset: 0,
+                range: 128,
+            }];
+            let desc_sets_write = [vk::WriteDescriptorSet::builder()
+                .dst_set(*descset)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_infos)
+                .build()];
+            unsafe { self.device.update_descriptor_sets(&desc_sets_write, &[]) };
+        }
+        /* let desc_layouts_light =
+            vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
+        let descriptor_set_allocate_info_light = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&desc_layouts_light);
+        let descriptor_sets_light = unsafe {
+            logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_light)
+        }?;
+
+        for descset in &descriptor_sets_light {
+            let buffer_infos = [vk::DescriptorBufferInfo {
+                buffer: light_buffer.buffer,
+                offset: 0,
+                range: 8,
+            }];
+            let desc_sets_write = [vk::WriteDescriptorSet::builder()
+                .dst_set(*descset)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&buffer_infos)
+                .build()];
+            unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
+        } */
+
+        let desc_layouts_texture =
+            vec![self.pipeline.descriptor_set_layouts[1]; self.swapchain.amount_of_images as usize];
+        let descriptor_counts =
+            vec![pipeline::MAXIMAL_NUMBER_OF_TEXTURES; self.swapchain.amount_of_images as usize];
+        let mut count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfoEXT::builder()
+            .descriptor_counts(&descriptor_counts);
+        let descriptor_set_allocate_info_texture = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.descriptor_pool)
+            .set_layouts(&desc_layouts_texture)
+            .push_next(&mut count_info);
+
+        self.descriptor_sets_texture = unsafe {
+            self.device.allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
+        }?;
+
+        self.text.clear_pipeline(&self.device);
+        self.text
+            .update_textures(&self.swapchain, &self.device, &self.renderpass)?;
         Ok(())
     }
 
@@ -333,6 +413,7 @@ impl Drop for Vulkano {
             self.device
                 .device_wait_idle()
                 .expect("Something went wrong while waiting");
+            self.text.cleanup(&self.device, &mut self.allocator);
             self.texture_storage.cleanup(&self.device);
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);

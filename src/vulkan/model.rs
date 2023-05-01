@@ -19,7 +19,7 @@ pub struct Model<V, I> {
 }
 
 #[allow(dead_code)]
-impl<V, I> Model<V, I> {
+impl<V: std::fmt::Debug, I: std::fmt::Debug> Model<V, I> {
     fn get(&self, handle: usize) -> Option<&I> {
         if let Some(&index) = self.handle_to_index.get(&handle) {
             self.instances.get(index)
@@ -247,6 +247,7 @@ pub struct InstanceData {
     pub roughness: f32,
 }
 
+#[allow(dead_code)]
 impl InstanceData {
     pub fn from_matrix_and_properties(
         model_matrix: na::Matrix4<f32>,
@@ -502,12 +503,14 @@ pub struct TexturedVertexData {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct TexturedInstanceData {
     pub model_matrix: [[f32; 4]; 4],
     pub inverse_model_matrix: [[f32; 4]; 4],
     pub texture_id: u32,
 }
 
+#[allow(dead_code)]
 impl TexturedInstanceData {
     pub fn from_matrix(model_matrix: na::Matrix4<f32>) -> TexturedInstanceData {
         TexturedInstanceData {

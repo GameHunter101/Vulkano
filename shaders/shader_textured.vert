@@ -15,6 +15,7 @@ layout(location=0)out vec2 uv;
 layout(location=1)out uint tex_id;
 
 void main(){
+    
     vec4 worldpos=model_matrix*vec4(position,1.);
     gl_Position=ubo.projection_matrix*ubo.view_matrix*worldpos;
     uv=texcoord;

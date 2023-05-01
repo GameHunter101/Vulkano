@@ -90,18 +90,23 @@ pub fn init_instance(entry: &Entry, layer_names: &[&str]) -> Result<Instance, vk
         .message_severity(
             vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
                 | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                // | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
                 | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
         )
         .message_type(
-            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
-                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
+            // vk::DebugUtilsMessageTypeFlagsEXT::GENERAL |
+            vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE| {
+                vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+            },
         )
         .pfn_user_callback(Some(vulkan_debug_utils_callback));
 
+    let mut validation_features = vk::ValidationFeaturesEXT::builder()
+        .enabled_validation_features(&[vk::ValidationFeatureEnableEXT::DEBUG_PRINTF]);
+
     let instance_create_info = vk::InstanceCreateInfo::builder()
         .push_next(&mut debug_create_info)
+        .push_next(&mut validation_features)
         .application_info(&app_info)
         .enabled_layer_names(&layer_name_pointers)
         .enabled_extension_names(&extension_name_pointers);
@@ -162,6 +167,7 @@ pub fn init_device_and_queues(
     let device_extension_name_pointers: Vec<*const i8> = vec![
         ash::extensions::khr::Swapchain::name().as_ptr(),
         "VK_EXT_descriptor_indexing\0".as_ptr() as *const i8,
+        ash::vk::KhrShaderNonSemanticInfoFn::name().as_ptr(),
     ];
     let mut indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures::builder()
         .runtime_descriptor_array(true)

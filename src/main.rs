@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use ash::vk;
 use nalgebra as na;
 use winit::{dpi::PhysicalSize, window::WindowBuilder};
@@ -13,6 +15,7 @@ mod vulkan {
     pub mod queues;
     pub mod surface;
     pub mod swapchain;
+    pub mod text;
     pub mod texture;
     pub mod utils;
     pub mod vulkano;
@@ -38,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_title("Vulkano")
         .build(&event_loop)?;
 
-    let mut vulkano = Vulkano::init(window)?;
+    let mut vulkano = Vulkano::init(&window)?;
 
     let mut camera = Camera::default();
 
@@ -47,6 +50,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut second_texture_id = vulkano.new_texture_from_file("./gfx/xdd.png")?;
 
     let third_texture_id = vulkano.new_texture_from_file("./gfx/newLogo.png")?;
+
+    let letters = vulkano.text.create_letters(
+        &[&fontdue::layout::TextStyle::new("Hello world!", 35.0, 0)],
+        [0., 1., 0.],
+    );
+    vulkano.text.create_vertex_data(
+        letters,
+        (100, 200),
+        &window,
+        &vulkano.instance,
+        &vulkano.device,
+        vulkano.physical_device,
+        &mut vulkano.allocator,
+        vulkano.pools.command_pool_graphics,
+        vulkano.queues.graphics_queue,
+        &vulkano.swapchain,
+        &vulkano.renderpass,
+    );
+    vulkano
+        .text
+        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator);
+    /* let letters2 = vulkano.text.create_letters(
+        &fontdue::layout::TextStyle::new("(and smaller)", 8.0, 0),
+        [0.6, 0.6, 0.6],
+    );
+    vulkano.text.create_vertex_data(
+        letters2,
+        (100, 400),
+        &window,
+        &vulkano.instance,
+        &vulkano.device,
+        vulkano.physical_device,
+        &mut vulkano.allocator,
+        vulkano.pools.command_pool_graphics,
+        vulkano.queues.graphics_queue,
+        &vulkano.swapchain,
+    );
+    vulkano
+        .text
+        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator); */
 
     let mut quad = Model::quad();
     let mut lights = LightManager::default();
@@ -209,7 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let imageinfos = vulkano.texture_storage.get_descriptor_image_info();
                 let descriptorwrite_image = vk::WriteDescriptorSet::builder()
-                    .dst_set(vulkano.descriptor_sets_texture[vulkano.swapchain.current_image])
+                    .dst_set(vulkano.descriptor_sets_texture[image_index as usize])
                     .dst_binding(0)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -276,7 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (vulkano.swapchain.current_image + 1) % vulkano.swapchain.amount_of_images as usize;
         }
         Event::MainEventsCleared => {
-            vulkano.window.request_redraw();
+            window.request_redraw();
         }
         _ => {}
     });

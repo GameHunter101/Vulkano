@@ -187,6 +187,7 @@ pub struct TextureStorage {
     textures: Vec<Texture>,
 }
 
+#[allow(dead_code)]
 impl TextureStorage {
     pub fn new() -> Self {
         TextureStorage { textures: vec![] }
