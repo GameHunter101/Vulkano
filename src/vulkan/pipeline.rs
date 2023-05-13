@@ -186,35 +186,44 @@ impl Pipeline {
         let colorblend_info =
             vk::PipelineColorBlendStateCreateInfo::builder().attachments(&colorblend_attachments);
 
-        let descriptor_set_layout_binding_descriptions_0 =
-            [vk::DescriptorSetLayoutBinding::builder()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::VERTEX)
-                .build()];
+        // Camera descriptor set
 
-        let descriptor_set_layout_info_0 = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&descriptor_set_layout_binding_descriptions_0);
-        let descriptor_set_layout_0 = unsafe {
-            logical_device.create_descriptor_set_layout(&descriptor_set_layout_info_0, None)
-        }?;
+        let camera_descriptor_set_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .build()];
 
-        let descriptor_set_layout_binding_descriptions_1 =
-            [vk::DescriptorSetLayoutBinding::builder()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                .build()];
+        // Lights descriptor set
 
-        let descriptor_set_layout_info_1 = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&descriptor_set_layout_binding_descriptions_1);
-        let descriptor_set_layout_1 = unsafe {
-            logical_device.create_descriptor_set_layout(&descriptor_set_layout_info_1, None)
-        }?;
+        let light_descriptor_set_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .build()];
 
-        let descriptor_layouts = vec![descriptor_set_layout_0, descriptor_set_layout_1];
+        let camera_descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&camera_descriptor_set_layout_bindings);
+
+        let light_descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&light_descriptor_set_layout_bindings);
+
+        let camera_descriptor_layout = unsafe {
+            logical_device
+                .create_descriptor_set_layout(&camera_descriptor_set_layout_info, None)
+                .expect("Failed to create descriptor set layout")
+        };
+
+        let light_descriptor_layout = unsafe {
+            logical_device
+                .create_descriptor_set_layout(&light_descriptor_set_layout_info, None)
+                .expect("Failed to create descriptor set layout")
+        };
+
+        let descriptor_layouts = vec![camera_descriptor_layout,light_descriptor_layout];
+
         let pipeline_layout_info =
             vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_layouts);
         let pipeline_layout =
@@ -439,6 +448,7 @@ impl Pipeline {
         }?;
 
         let desclayouts = vec![descriptor_set_layout0, descriptor_set_layout1];
+
 
         let pipelinelayout_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&desclayouts);
         let pipelinelayout =

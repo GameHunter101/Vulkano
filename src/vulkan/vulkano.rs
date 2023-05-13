@@ -16,8 +16,11 @@ use crate::{
 
 use crate::Model;
 
+use super::model::InstanceData;
+use super::model::ModelTypes;
 use super::model::TexturedInstanceData;
 use super::model::TexturedVertexData;
+use super::model::VertexData;
 use super::pipeline;
 use super::text::AllText;
 use super::texture::TextureStorage;
@@ -39,12 +42,13 @@ pub struct Vulkano {
     pub pipeline: Pipeline,
     pub pools: Pools,
     pub commandbuffers: Vec<vk::CommandBuffer>,
-    pub models: Vec<Model<TexturedVertexData, TexturedInstanceData>>,
+    pub models: Vec<ModelTypes>,
+    pub screen_quad: Option<Model<VertexData, InstanceData>>,
     pub allocator: std::mem::ManuallyDrop<gpu_allocator::vulkan::Allocator>,
     pub uniform_buffer: Buffer,
     descriptor_pool: vk::DescriptorPool,
-    descriptor_sets_camera: Vec<vk::DescriptorSet>,
-    pub descriptor_sets_light: Vec<vk::DescriptorSet>,
+    camera_descriptor_sets: Vec<vk::DescriptorSet>,
+    pub lights_descriptor_sets: Vec<vk::DescriptorSet>,
     pub descriptor_sets_texture: Vec<vk::DescriptorSet>,
     pub light_buffer: Buffer,
     pub texture_storage: TextureStorage,
@@ -77,7 +81,7 @@ impl Vulkano {
         let renderpass = init_renderpass(&logical_device, swapchain.surface_format.format)?;
         swapchain.create_framebuffers(&logical_device, renderpass)?;
 
-        // let pipeline = Pipeline::init_textured(&logical_device, &swapchain, &renderpass)?;
+        // let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
         let pools = Pools::init(&logical_device, &queue_families)?;
 
         let allocator_create_description = gpu_allocator::vulkan::AllocatorCreateDesc {
@@ -97,10 +101,9 @@ impl Vulkano {
         let mut uniform_buffer = Buffer::new(
             &logical_device,
             &mut allocator,
-            128,
+            192,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         );
-
         let mut light_buffer = Buffer::new(
             &logical_device,
             &mut allocator,
@@ -108,9 +111,15 @@ impl Vulkano {
             vk::BufferUsageFlags::STORAGE_BUFFER,
         );
 
-        let camera_transform: [[[f32; 4]; 4]; 2] = [
+        let camera_transform: [[[f32; 4]; 4]; 3] = [
             na::Matrix4::identity().into(),
             na::Matrix4::identity().into(),
+            [[
+                swapchain.extent.width as f32,
+                swapchain.extent.height as f32,
+                0.0,
+                0.0,
+            ]; 4],
         ];
 
         uniform_buffer.fill(&camera_transform);
@@ -125,11 +134,12 @@ impl Vulkano {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
                 descriptor_count: swapchain.amount_of_images,
             },
-            vk::DescriptorPoolSize {
+            /* vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 descriptor_count: pipeline::MAXIMAL_NUMBER_OF_TEXTURES * swapchain.amount_of_images,
-            },
+            }, */
         ];
+
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND_EXT)
             .max_sets(pipeline::MAXIMAL_NUMBER_OF_TEXTURES * pool_sizes.len() as u32)
@@ -137,22 +147,22 @@ impl Vulkano {
         let descriptor_pool =
             unsafe { logical_device.create_descriptor_pool(&descriptor_pool_info, None) }?;
 
-        let pipeline = Pipeline::init_textured(&logical_device, &swapchain, &renderpass)?;
+        let pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
 
         let desc_layouts_camera =
             vec![pipeline.descriptor_set_layouts[0]; swapchain.amount_of_images as usize];
         let descriptor_set_allocate_info_camera = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&desc_layouts_camera);
-        let descriptor_sets_camera = unsafe {
+        let camera_descriptor_sets = unsafe {
             logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_camera)
         }?;
 
-        for descset in &descriptor_sets_camera {
+        for descset in &camera_descriptor_sets {
             let buffer_infos = [vk::DescriptorBufferInfo {
                 buffer: uniform_buffer.buffer,
                 offset: 0,
-                range: 128,
+                range: 192,
             }];
             let desc_sets_write = [vk::WriteDescriptorSet::builder()
                 .dst_set(*descset)
@@ -162,16 +172,17 @@ impl Vulkano {
                 .build()];
             unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
         }
-        /* let desc_layouts_light =
+
+        let desc_layouts_light =
             vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
         let descriptor_set_allocate_info_light = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&desc_layouts_light);
-        let descriptor_sets_light = unsafe {
+        let lights_descriptor_sets = unsafe {
             logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_light)
         }?;
 
-        for descset in &descriptor_sets_light {
+        for descset in &lights_descriptor_sets {
             let buffer_infos = [vk::DescriptorBufferInfo {
                 buffer: light_buffer.buffer,
                 offset: 0,
@@ -184,9 +195,9 @@ impl Vulkano {
                 .buffer_info(&buffer_infos)
                 .build()];
             unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
-        } */
+        }
 
-        let desc_layouts_texture =
+        /* let desc_layouts_texture =
             vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
         let descriptor_counts =
             vec![pipeline::MAXIMAL_NUMBER_OF_TEXTURES; swapchain.amount_of_images as usize];
@@ -199,7 +210,7 @@ impl Vulkano {
 
         let descriptor_sets_texture = unsafe {
             logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
-        }?;
+        }?; */
 
         let text = AllText::new("./fonts/ARIAL.TTF")?;
 
@@ -221,12 +232,13 @@ impl Vulkano {
             pools,
             commandbuffers,
             models: vec![],
+            screen_quad: None,
             allocator: std::mem::ManuallyDrop::new(allocator),
             uniform_buffer,
             descriptor_pool,
-            descriptor_sets_camera,
-            descriptor_sets_light: vec![],
-            descriptor_sets_texture,
+            camera_descriptor_sets,
+            lights_descriptor_sets,
+            descriptor_sets_texture: vec![],
             light_buffer,
             texture_storage: TextureStorage::new(),
             text,
@@ -279,16 +291,22 @@ impl Vulkano {
                 self.pipeline.layout,
                 0,
                 &[
-                    self.descriptor_sets_camera[index],
-                    // self.descriptor_sets_light[index],
-                    self.descriptor_sets_texture[index],
+                    self.camera_descriptor_sets[index],
+                    self.lights_descriptor_sets[index],
+                    // self.descriptor_sets_texture[index],
                 ],
                 &[],
             );
             for model in &self.models {
-                model.draw(&self.device, command_buffer);
+                match model {
+                    ModelTypes::Normal(normal) => normal.draw(&self.device, command_buffer),
+                    ModelTypes::Textured(textured) => textured.draw(&self.device, command_buffer),
+                }
             }
-            self.text.draw(&self.device, command_buffer, index);
+            if let Some(quad) = &self.screen_quad {
+                quad.draw(&self.device, command_buffer);
+            }
+            // self.text.draw(&self.device, command_buffer, index);
             self.device.cmd_end_render_pass(command_buffer);
             self.device.end_command_buffer(command_buffer)?;
         }
@@ -314,9 +332,9 @@ impl Vulkano {
         self.swapchain
             .create_framebuffers(&self.device, self.renderpass)?;
         self.pipeline.cleanup(&self.device);
-        self.pipeline = Pipeline::init_textured(&self.device, &self.swapchain, &self.renderpass)?;
+        self.pipeline = Pipeline::init(&self.device, &self.swapchain, &self.renderpass)?;
 
-        unsafe {
+        /* unsafe {
             self.device.reset_descriptor_pool(
                 self.descriptor_pool,
                 ash::vk::DescriptorPoolResetFlags::empty(),
@@ -328,15 +346,15 @@ impl Vulkano {
         let descriptor_set_allocate_info_camera = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(self.descriptor_pool)
             .set_layouts(&desc_layouts_camera);
-        self.descriptor_sets_camera = unsafe {
+        let camera_descriptor_sets = unsafe {
             self.device.allocate_descriptor_sets(&descriptor_set_allocate_info_camera)
         }?;
 
-        for descset in &self.descriptor_sets_camera {
+        for descset in &camera_descriptor_sets {
             let buffer_infos = [vk::DescriptorBufferInfo {
                 buffer: self.uniform_buffer.buffer,
                 offset: 0,
-                range: 128,
+                range: 192,
             }];
             let desc_sets_write = [vk::WriteDescriptorSet::builder()
                 .dst_set(*descset)
@@ -346,18 +364,19 @@ impl Vulkano {
                 .build()];
             unsafe { self.device.update_descriptor_sets(&desc_sets_write, &[]) };
         }
-        /* let desc_layouts_light =
-            vec![pipeline.descriptor_set_layouts[1]; swapchain.amount_of_images as usize];
+
+        let desc_layouts_light =
+            vec![self.pipeline.descriptor_set_layouts[1]; self.swapchain.amount_of_images as usize];
         let descriptor_set_allocate_info_light = vk::DescriptorSetAllocateInfo::builder()
-            .descriptor_pool(descriptor_pool)
+            .descriptor_pool(self.descriptor_pool)
             .set_layouts(&desc_layouts_light);
-        let descriptor_sets_light = unsafe {
-            logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info_light)
+        let lights_descriptor_sets = unsafe {
+            self.device.allocate_descriptor_sets(&descriptor_set_allocate_info_light)
         }?;
 
-        for descset in &descriptor_sets_light {
+        for descset in &lights_descriptor_sets {
             let buffer_infos = [vk::DescriptorBufferInfo {
-                buffer: light_buffer.buffer,
+                buffer: self.light_buffer.buffer,
                 offset: 0,
                 range: 8,
             }];
@@ -367,10 +386,10 @@ impl Vulkano {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(&buffer_infos)
                 .build()];
-            unsafe { logical_device.update_descriptor_sets(&desc_sets_write, &[]) };
+            unsafe { self.device.update_descriptor_sets(&desc_sets_write, &[]) };
         } */
 
-        let desc_layouts_texture =
+        /* let desc_layouts_texture =
             vec![self.pipeline.descriptor_set_layouts[1]; self.swapchain.amount_of_images as usize];
         let descriptor_counts =
             vec![pipeline::MAXIMAL_NUMBER_OF_TEXTURES; self.swapchain.amount_of_images as usize];
@@ -382,12 +401,13 @@ impl Vulkano {
             .push_next(&mut count_info);
 
         self.descriptor_sets_texture = unsafe {
-            self.device.allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
-        }?;
+            self.device
+                .allocate_descriptor_sets(&descriptor_set_allocate_info_texture)
+        }?; */
 
-        self.text.clear_pipeline(&self.device);
+        /* self.text.clear_pipeline(&self.device);
         self.text
-            .update_textures(&self.swapchain, &self.device, &self.renderpass)?;
+            .update_textures(&self.swapchain, &self.device, &self.renderpass)?; */
         Ok(())
     }
 
@@ -405,6 +425,17 @@ impl Vulkano {
             self.queues.graphics_queue,
         )
     }
+    fn cleanup_model<V, I>(&mut self, model: &mut Model<V, I>) {
+        if let Some(vertex_buffer) = &mut model.vertex_buffer {
+            vertex_buffer.cleanup(&self.device, &mut self.allocator);
+        }
+        if let Some(index_buffer) = &mut model.instance_buffer {
+            index_buffer.cleanup(&self.device, &mut self.allocator);
+        }
+        if let Some(index_buffer) = &mut model.index_buffer {
+            index_buffer.cleanup(&self.device, &mut self.allocator);
+        }
+    }
 }
 
 impl Drop for Vulkano {
@@ -421,15 +452,15 @@ impl Drop for Vulkano {
             self.uniform_buffer
                 .cleanup(&self.device, &mut self.allocator);
             for model in &mut self.models {
-                if let Some(vertex_buffer) = &mut model.vertex_buffer {
-                    vertex_buffer.cleanup(&self.device, &mut self.allocator);
+                match model {
+                    ModelTypes::Normal(normal) => normal.cleanup(&self.device, &mut self.allocator),
+                    ModelTypes::Textured(textured) => {
+                        textured.cleanup(&self.device, &mut self.allocator)
+                    }
                 }
-                if let Some(index_buffer) = &mut model.instance_buffer {
-                    index_buffer.cleanup(&self.device, &mut self.allocator);
-                }
-                if let Some(index_buffer) = &mut model.index_buffer {
-                    index_buffer.cleanup(&self.device, &mut self.allocator);
-                }
+            }
+            if let Some(quad) = &mut self.screen_quad {
+                quad.cleanup(&self.device, &mut self.allocator);
             }
             std::mem::ManuallyDrop::drop(&mut self.allocator);
             self.pools.cleanup(&self.device);

@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_debug_printf:enable
 
 layout(location=0)in vec3 position;
 layout(location=1)in vec2 texcoord;
@@ -16,6 +17,7 @@ layout(location=1)out uint tex_id;
 
 void main(){
     
+    // debugPrintfEXT("First:  %f, second: %f, third: %f",position[0],position[1],position[2]);
     vec4 worldpos=model_matrix*vec4(position,1.);
     gl_Position=ubo.projection_matrix*ubo.view_matrix*worldpos;
     uv=texcoord;

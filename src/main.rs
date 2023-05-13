@@ -45,13 +45,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut camera = Camera::default();
 
-    let mut texture_id = vulkano.new_texture_from_file("./gfx/dude.png")?;
+    /* let mut texture_id = vulkano.new_texture_from_file("./gfx/dude.png")?;
 
     let mut second_texture_id = vulkano.new_texture_from_file("./gfx/xdd.png")?;
 
-    let third_texture_id = vulkano.new_texture_from_file("./gfx/newLogo.png")?;
+    let third_texture_id = vulkano.new_texture_from_file("./gfx/newLogo.png")?; */
 
-    let letters = vulkano.text.create_letters(
+    /* let letters = vulkano.text.create_letters(
         &[&fontdue::layout::TextStyle::new("Hello world!", 35.0, 0)],
         [0., 1., 0.],
     );
@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     vulkano
         .text
-        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator);
+        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator); */
     /* let letters2 = vulkano.text.create_letters(
         &fontdue::layout::TextStyle::new("(and smaller)", 8.0, 0),
         [0.6, 0.6, 0.6],
@@ -91,35 +91,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .text
         .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator); */
 
-    let mut quad = Model::quad();
+    // let mut quad = Model::quad();
+
+    let mut screen_quad = Model::screen_quad();
+
     let mut lights = LightManager::default();
-
-    /* for i in 0..10 {
-        for j in 0..10 {
-            sphere.insert_visibly(InstanceData::from_matrix_and_properties(
-                na::Matrix4::new_translation(&na::Vector3::new(i as f32 - 5., j as f32 + 5., 10.0))
-                    * na::Matrix4::new_scaling(0.5),
-                [0., 0., 0.8],
-                i as f32 * 0.1,
-                j as f32 * 0.1,
-            ));
-        }
-    } */
-
-    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
-        na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0)),
-        texture_id,
-    ));
-
-    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
-        na::Matrix4::new_translation(&na::Vector3::new(2.0, 0.0, 0.3)),
-        second_texture_id,
-    ));
-
-    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
-        na::Matrix4::new_translation(&na::Vector3::new(-0.5, 0.0, -0.3)),
-        third_texture_id,
-    ));
 
     lights.add_light(DirectionalLight {
         direction: na::Vector3::new(-1., -1., 0.),
@@ -138,19 +114,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         luminous_flux: [100.0, 100.0, 100.0],
     });
 
+    screen_quad.insert_visibly(InstanceData::screen_quad(
+        camera.view_matrix,
+        camera.projection_matrix,
+    ));
+
+    /* quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
+        na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0)),
+        texture_id,
+    ));
+
+    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
+        na::Matrix4::new_translation(&na::Vector3::new(2.0, 0.0, 0.3)),
+        second_texture_id,
+    ));
+
+    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
+        na::Matrix4::new_translation(&na::Vector3::new(-0.5, 0.0, -0.3)),
+        third_texture_id,
+    )); */
+
     lights.update_buffer(
         &vulkano.device,
         &mut vulkano.light_buffer,
-        &mut vulkano.descriptor_sets_light,
+        &mut vulkano.lights_descriptor_sets,
     );
 
-    quad.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
+    /* quad.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
     quad.update_index_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
     quad.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+        .unwrap(); */
+
+    screen_quad
+        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
-    vulkano.models = vec![quad];
+    screen_quad
+        .update_index_buffer(&vulkano.device, &mut vulkano.allocator)
+        .unwrap();
+    screen_quad
+        .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+        .unwrap();
+
+    // let test: Vec<ModelTypes> = vec![ModelTypes::Textured(quad)];
+
+    vulkano.models = vec![];
+    vulkano.screen_quad = Some(screen_quad);
 
     let mut mouse_pos: Option<winit::dpi::PhysicalPosition<f64>> = None;
 
@@ -201,9 +211,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     winit::event::VirtualKeyCode::F11 => {
                         screenshot(&vulkano).expect("Trouble taking screenshot");
                     }
-                    winit::event::VirtualKeyCode::F10 => {
-                        std::mem::swap(&mut texture_id, &mut second_texture_id);
-                    }
                     _ => {}
                 }
             }
@@ -243,14 +250,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vulkano.swapchain.may_begin_drawing[vulkano.swapchain.current_image]
                     ])
                     .expect("Resetting fences");
-                camera.update_buffer(&mut vulkano.uniform_buffer);
+                camera.update_buffer(
+                    &mut vulkano.uniform_buffer,
+                    vulkano.swapchain.extent.width,
+                    vulkano.swapchain.extent.height,
+                );
                 for model in &mut vulkano.models {
-                    model
-                        .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
-                        .unwrap();
+                    match model {
+                        ModelTypes::Normal(normal) => normal
+                            .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+                            .unwrap(),
+                        ModelTypes::Textured(textured) => textured
+                            .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
+                            .unwrap(),
+                    }
                 }
 
-                let imageinfos = vulkano.texture_storage.get_descriptor_image_info();
+                /* let imageinfos = vulkano.texture_storage.get_descriptor_image_info();
                 let descriptorwrite_image = vk::WriteDescriptorSet::builder()
                     .dst_set(vulkano.descriptor_sets_texture[image_index as usize])
                     .dst_binding(0)
@@ -261,7 +277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 vulkano
                     .device
-                    .update_descriptor_sets(&[descriptorwrite_image], &[]);
+                    .update_descriptor_sets(&[descriptorwrite_image], &[]); */
 
                 vulkano
                     .update_command_buffer(image_index as usize)
@@ -308,7 +324,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             vulkano.swapchain.extent.width as f32
                                 / vulkano.swapchain.extent.height as f32,
                         );
-                        camera.update_buffer(&mut vulkano.uniform_buffer);
+                        camera.update_buffer(
+                            &mut vulkano.uniform_buffer,
+                            vulkano.swapchain.extent.width,
+                            vulkano.swapchain.extent.height,
+                        );
                     }
                     _ => {
                         panic!("Unhandled queue presentation error");

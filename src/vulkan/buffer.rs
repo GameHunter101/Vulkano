@@ -49,7 +49,7 @@ impl Buffer {
         Buffer { buffer, allocation }
     }
 
-    pub fn fill<T: std::fmt::Debug>(&mut self, data: &[T]) {
+    pub fn fill<T>(&mut self, data: &[T]) {
         let destination = self.allocation.mapped_ptr().unwrap().cast().as_ptr();
         unsafe {
             copy_nonoverlapping::<T>(data.as_ptr(), destination, data.len());

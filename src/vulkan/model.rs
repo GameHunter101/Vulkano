@@ -5,12 +5,14 @@ use nalgebra as na;
 
 use crate::Buffer;
 
+use super::pipeline;
+
 pub struct Model<V, I> {
     vertex_data: Vec<V>,
     index_data: Vec<u32>,
     handle_to_index: std::collections::HashMap<usize, usize>,
     handles: Vec<usize>,
-    instances: Vec<I>,
+    pub instances: Vec<I>,
     first_invisible: usize,
     next_handle: usize,
     pub vertex_buffer: Option<Buffer>,
@@ -19,7 +21,7 @@ pub struct Model<V, I> {
 }
 
 #[allow(dead_code)]
-impl<V: std::fmt::Debug, I: std::fmt::Debug> Model<V, I> {
+impl<V, I> Model<V, I> {
     fn get(&self, handle: usize) -> Option<&I> {
         if let Some(&index) = self.handle_to_index.get(&handle) {
             self.instances.get(index)
@@ -236,6 +238,22 @@ impl<V: std::fmt::Debug, I: std::fmt::Debug> Model<V, I> {
             }
         }
     }
+
+    pub fn cleanup(
+        &mut self,
+        logical_device: &ash::Device,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+    ) {
+        if let Some(vertex_buffer) = &mut self.vertex_buffer {
+            vertex_buffer.cleanup(logical_device, allocator);
+        }
+        if let Some(index_buffer) = &mut self.instance_buffer {
+            index_buffer.cleanup(logical_device, allocator);
+        }
+        if let Some(index_buffer) = &mut self.index_buffer {
+            index_buffer.cleanup(logical_device, allocator);
+        }
+    }
 }
 
 #[repr(C)]
@@ -261,6 +279,19 @@ impl InstanceData {
             color,
             metallic,
             roughness,
+        }
+    }
+
+    pub fn screen_quad(
+        view_matrix: na::Matrix4<f32>,
+        projection_matrix: na::Matrix4<f32>,
+    ) -> InstanceData {
+        InstanceData {
+            model_matrix: na::Matrix4::identity().into(),
+            inverse_model_matrix: na::Matrix4::identity().into(),
+            color: [0.0, 0.0, 0.0],
+            metallic: 0.0,
+            roughness: 0.0,
         }
     }
 }
@@ -480,6 +511,37 @@ impl Model<VertexData, InstanceData> {
         }
         self.index_data = new_indices;
     }
+
+    pub fn screen_quad() -> Model<VertexData, InstanceData> {
+        let lb = VertexData {
+            position: [-1.0, 1.0, 0.0],
+            normal: [-1.0, 1.0, 0.0],
+        }; //lb: left-bottom
+        let lt = VertexData {
+            position: [-1.0, -1.0, 0.0],
+            normal: [-1.0, -1.0, 0.0],
+        };
+        let rb = VertexData {
+            position: [1.0, 1.0, 0.0],
+            normal: normalize([1.0, 1.0, 0.0]),
+        };
+        let rt = VertexData {
+            position: [1.0, -1.0, 0.0],
+            normal: [1.0, -1.0, 0.0],
+        };
+        Model {
+            vertex_data: vec![lb, lt, rb, rt],
+            index_data: vec![0, 2, 1, 1, 2, 3],
+            handle_to_index: std::collections::HashMap::new(),
+            handles: Vec::new(),
+            instances: Vec::new(),
+            first_invisible: 0,
+            next_handle: 0,
+            vertex_buffer: None,
+            index_buffer: None,
+            instance_buffer: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -563,4 +625,9 @@ impl Model<TexturedVertexData, TexturedInstanceData> {
             instance_buffer: None,
         }
     }
+}
+
+pub enum ModelTypes {
+    Textured(Model<TexturedVertexData, TexturedInstanceData>),
+    Normal(Model<VertexData, InstanceData>),
 }

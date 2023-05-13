@@ -49,10 +49,10 @@ pub unsafe extern "system" fn vulkan_debug_utils_callback(
     if severity == "info" {
         let msg = message.to_str().expect("An error occurred in Vulkan debug utils callback. What kind of not-String are you handing me?");
         if msg.contains("DEBUG-PRINTF") {
-            let msg = msg
+            let mut msg = msg
                 .to_string()
                 .replace("Validation Information: [ UNASSIGNED-DEBUG-PRINTF ]", "");
-            println!("[Debug][printf] {:?}", msg);
+            println!("[Debug][printf] {}", msg);
         }
     } else {
         println!("[Debug][{}][{}] {:?}", severity, ty, message);

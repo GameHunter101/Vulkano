@@ -3,7 +3,7 @@ use nalgebra as na;
 use crate::Buffer;
 
 pub struct Camera {
-    view_matrix: na::Matrix4<f32>,
+    pub view_matrix: na::Matrix4<f32>,
     position: na::Vector3<f32>,
     view_direction: na::Unit<na::Vector3<f32>>,
     down_direction: na::Unit<na::Vector3<f32>>,
@@ -12,7 +12,7 @@ pub struct Camera {
     aspect: f32,
     near: f32,
     far: f32,
-    projection_matrix: na::Matrix4<f32>,
+    pub projection_matrix: na::Matrix4<f32>,
 }
 
 impl Default for Camera {
@@ -37,8 +37,12 @@ impl Default for Camera {
 
 #[allow(dead_code)]
 impl Camera {
-    pub fn update_buffer(&self, buffer: &mut Buffer) {
-        let data: [[[f32; 4]; 4]; 2] = [self.view_matrix.into(), self.projection_matrix.into()];
+    pub fn update_buffer(&self, buffer: &mut Buffer, screen_width: u32, screen_height: u32) {
+        let data: [[[f32; 4]; 4]; 3] = [
+            self.view_matrix.into(),
+            self.projection_matrix.into(),
+            [[screen_width as f32, screen_height as f32, 0.0, 0.0]; 4],
+        ];
         buffer.fill(&data);
     }
 
