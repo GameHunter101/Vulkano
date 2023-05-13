@@ -20,8 +20,8 @@ impl Default for Camera {
         let mut cam = Camera {
             view_matrix: na::Matrix4::identity(),
             position: na::Vector3::new(0.0, -3.0, -3.0),
-            view_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, 1.0)),
-            down_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, -1.0)),
+            view_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, 0.0)),
+            down_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, -1.0)),
             left_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, 0.0)),
             fovy: std::f32::consts::FRAC_PI_3,
             aspect: 800.0 / 600.0,
