@@ -1,3 +1,4 @@
+use na::Vector3;
 use nalgebra as na;
 
 use crate::Buffer;
@@ -5,31 +6,28 @@ use crate::Buffer;
 pub struct Camera {
     pub view_matrix: na::Matrix4<f32>,
     position: na::Vector3<f32>,
-    view_direction: na::Unit<na::Vector3<f32>>,
     down_direction: na::Unit<na::Vector3<f32>>,
     left_direction: na::Unit<na::Vector3<f32>>,
-    fovy: f32,
-    aspect: f32,
-    near: f32,
-    far: f32,
-    pub projection_matrix: na::Matrix4<f32>,
+    rotation_matrix: na::Matrix3<f32>,
+    yaw: f32,
+    pitch: f32,
 }
 
 impl Default for Camera {
     fn default() -> Self {
         let mut cam = Camera {
             view_matrix: na::Matrix4::identity(),
-            position: na::Vector3::new(0.0, -3.0, -3.0),
-            view_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, 0.0)),
+            position: na::Vector3::new(0.0, 0.0, -5.0),
             down_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, -1.0)),
-            left_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, 0.0)),
-            fovy: std::f32::consts::FRAC_PI_3,
-            aspect: 800.0 / 600.0,
-            near: 0.1,
-            far: 100.0,
-            projection_matrix: na::Matrix4::identity(),
+            left_direction: na::Unit::new_normalize(na::Vector3::new(1.0, 0.0, 0.0)),
+            rotation_matrix: na::Matrix3::from_columns(&[
+                na::Vector3::new(-1.0, 0.0, 0.0),
+                na::Vector3::new(0.0, -1.0, 0.0),
+                na::Vector3::new(0.0, 0.0, 1.0),
+            ]),
+            pitch: 0.0,
+            yaw: 0.0,
         };
-        cam.update_projection_matrix();
         cam.update_view_matrix();
         cam
     }
@@ -38,66 +36,84 @@ impl Default for Camera {
 #[allow(dead_code)]
 impl Camera {
     pub fn update_buffer(&self, buffer: &mut Buffer, screen_width: u32, screen_height: u32) {
-        let data: [[[f32; 4]; 4]; 3] = [
+        let data: [[[f32; 4]; 4]; 2] = [
             self.view_matrix.into(),
-            self.projection_matrix.into(),
             [[screen_width as f32, screen_height as f32, 0.0, 0.0]; 4],
         ];
+        // dbg!(data);
         buffer.fill(&data);
     }
 
     fn update_view_matrix(&mut self) {
-        let right = na::Unit::new_normalize(self.down_direction.cross(&self.view_direction));
-        let matrix = na::Matrix4::new(
-            right.x,
-            right.y,
-            right.z,
-            -right.dot(&self.position), //
-            self.down_direction.x,
-            self.down_direction.y,
-            self.down_direction.z,
-            -self.down_direction.dot(&self.position), //
-            self.view_direction.x,
-            self.view_direction.y,
-            self.view_direction.z,
-            -self.view_direction.dot(&self.position), //
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-        );
-        self.left_direction = na::Unit::new_normalize(
+        let rotation_matrix = self.rotation_matrix.to_homogeneous();
+
+        let translation_matrix = na::Matrix4::from(na::Translation3::from(self.position));
+        let affine_matrix = translation_matrix * rotation_matrix;
+
+        /* self.left_direction = na::Unit::new_normalize(
             na::Vector3::new(0.0, -1.0, 0.0).cross(self.view_direction.as_ref()),
         );
         self.down_direction =
-            na::Unit::new_normalize(self.left_direction.cross(self.view_direction.as_ref()));
-        self.view_matrix = matrix;
+            na::Unit::new_normalize(self.left_direction.cross(self.view_direction.as_ref())); */
+        self.view_matrix = affine_matrix;
     }
 
-    fn update_projection_matrix(&mut self) {
-        let d = 1.0 / (0.5 * self.fovy).tan();
-        self.projection_matrix = na::Matrix4::new(
-            d / self.aspect,
+    pub fn update_rotation(&mut self, mouse_delta: [f64; 2]) {
+        let sensitvity = 0.01;
+        self.yaw += mouse_delta[0] as f32 * sensitvity;
+        self.pitch -= mouse_delta[1] as f32 * sensitvity;
+
+        /* let lr_axis_rotation = na::Rotation3::from_axis_angle(
+            &na::Unit::new_normalize(na::Vector3::new(1.0, 0.0, 0.0)),
+            self.pitch,
+        );
+        let up_axis_rotation = na::Rotation3::from_axis_angle(
+            &na::Unit::new_normalize(na::Vector3::new(0.0, 1.0, 0.0)),
+            self.yaw,
+        ); */
+
+        let yaw_rotation = na::Matrix3::new(
+            self.yaw.cos(),
             0.0,
-            0.0,
-            0.0,
-            0.0,
-            d,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            self.far / (self.far - self.near),
-            -self.near * self.far / (self.far - self.near),
-            0.0,
+            self.yaw.sin(),
             0.0,
             1.0,
             0.0,
+            -self.yaw.sin(),
+            0.0,
+            self.yaw.cos(),
         );
+
+        let pitch_rotation = na::Matrix3::new(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            self.pitch.cos(),
+            -self.pitch.sin(),
+            0.0,
+            self.pitch.sin(),
+            self.pitch.cos(),
+        );
+
+        self.rotation_matrix = yaw_rotation * pitch_rotation;
+
+        // dbg!(self.matrix_to_euler_angles(self.rotation_matrix));
+
+        self.update_view_matrix();
+    }
+
+    fn matrix_to_euler_angles(&self, matrix: na::Matrix3<f32>) -> [f32; 3] {
+        let pitch = matrix[(2, 0)].asin();
+        let roll = matrix[(2, 1)].atan2(matrix[(2, 2)]);
+        let yaw = matrix[(1, 0)].atan2(matrix[(0, 0)]);
+
+        [pitch, roll, yaw]
     }
 
     pub fn move_forward(&mut self, distance: f32) {
-        self.position += distance * self.view_direction.as_ref();
+        // self.position += distance * self.view_direction.as_ref();
+        self.position += distance * (self.rotation_matrix * na::Vector3::new(0.0, 0.0, 1.0));
         self.update_view_matrix();
     }
 
@@ -105,20 +121,33 @@ impl Camera {
         self.move_forward(-distance);
     }
 
-    pub fn move_right(&mut self, distance: f32) {
-        let rotation = na::Rotation3::from_axis_angle(&self.down_direction, 90.0);
-        let rotated_view = rotation * self.view_direction.as_ref();
-        self.position += distance * rotated_view;
+    pub fn move_left(&mut self, distance: f32) {
+        let rotation_matrix = na::Matrix3::new(0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0);
+        /* let rotated_view = rotation_matrix * self.rotation_matrix;
+        self.position += distance * rotated_view; */
+        self.position +=
+            distance * (rotation_matrix * self.rotation_matrix * na::Vector3::new(0.0, 0.0, 1.0));
         self.update_view_matrix();
     }
 
-    pub fn move_left(&mut self, distance: f32) {
-        self.move_right(-distance);
+    pub fn move_right(&mut self, distance: f32) {
+        self.move_left(-distance);
     }
 
     pub fn turn_right(&mut self, angle: f32) {
-        let rotation = na::Rotation3::from_axis_angle(&self.down_direction, angle);
-        self.view_direction = rotation * self.view_direction;
+        // let rotation = na::Rotation3::from_axis_angle(&self.down_direction, angle);
+        let rotation_matrix = na::Matrix3::new(
+            angle.cos(),
+            0.0,
+            angle.sin(),
+            0.0,
+            1.0,
+            0.0,
+            -angle.sin(),
+            0.0,
+            angle.cos(),
+        );
+        self.rotation_matrix *= rotation_matrix;
         self.update_view_matrix();
     }
 
@@ -127,19 +156,22 @@ impl Camera {
     }
 
     pub fn turn_up(&mut self, angle: f32) {
-        let right = na::Unit::new_normalize(self.down_direction.cross(&self.view_direction));
-        let rotation = na::Rotation3::from_axis_angle(&right, angle);
-        self.view_direction = rotation * self.view_direction;
-        self.down_direction = rotation * self.down_direction;
+        let rotation_matrix = na::Matrix3::new(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            angle.cos(),
+            -angle.sin(),
+            0.0,
+            angle.sin(),
+            angle.cos(),
+        );
+        self.rotation_matrix *= rotation_matrix;
         self.update_view_matrix();
     }
 
     pub fn turn_down(&mut self, angle: f32) {
         self.turn_up(-angle);
-    }
-
-    pub fn set_aspect(&mut self, aspect: f32) {
-        self.aspect = aspect;
-        self.update_projection_matrix();
     }
 }

@@ -40,6 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_inner_size(PhysicalSize::<u32>::from((800, 600)))
         .with_title("Vulkano")
         .build(&event_loop)?;
+    // window.set_cursor_visible(false);
+    // window.set_cursor_grab(winit::window::CursorGrabMode::Locked)?;
 
     let mut vulkano = Vulkano::init(&window)?;
 
@@ -114,10 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         luminous_flux: [100.0, 100.0, 100.0],
     });
 
-    screen_quad.insert_visibly(InstanceData::screen_quad(
-        camera.view_matrix,
-        camera.projection_matrix,
-    ));
+    screen_quad.insert_visibly(InstanceData::screen_quad(camera.view_matrix));
 
     /* quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
         na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0)),
@@ -166,6 +165,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
+        /* Event::WindowEvent { event: WindowEvent::MouseInput { state,button, ..},.. } => {
+            if button == winit::event::MouseButton::Left && state == winit::event::ElementState::Pressed {
+                window.set_cursor_visible(false);
+                window.set_cursor_grab(winit::window::CursorGrabMode::Locked);
+            }
+        } */
         Event::WindowEvent {
             event: WindowEvent::CursorLeft { .. },
             ..
@@ -178,8 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..
         } => {
             if let Some(mouse_pos) = mouse_pos {
-                camera.turn_right(((position.x - mouse_pos.x) * 0.01) as f32);
-                camera.turn_up(((mouse_pos.y - position.y) * 0.01) as f32);
+                camera.update_rotation([position.x - mouse_pos.x, mouse_pos.y - position.y]);
             }
             mouse_pos = Some(position);
         }
@@ -210,6 +214,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     winit::event::VirtualKeyCode::F11 => {
                         screenshot(&vulkano).expect("Trouble taking screenshot");
+                    }
+                    winit::event::VirtualKeyCode::Escape => {
+                        window.set_cursor_visible(true);
+                        window.set_cursor_grab(winit::window::CursorGrabMode::None);
                     }
                     _ => {}
                 }
@@ -320,10 +328,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(..) => {}
                     Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                         vulkano.recreate_swapchain().expect("Swapchain recreation");
-                        camera.set_aspect(
-                            vulkano.swapchain.extent.width as f32
-                                / vulkano.swapchain.extent.height as f32,
-                        );
                         camera.update_buffer(
                             &mut vulkano.uniform_buffer,
                             vulkano.swapchain.extent.width,

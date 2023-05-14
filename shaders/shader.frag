@@ -10,6 +10,7 @@ layout(location=3)in vec3 camera_coordinates;
 layout(location=4)in float roughness;
 layout(location=5)in float metallic;
 layout(location=6)in vec2 dimensions;
+layout(location=7)in mat3 camera_rotation;
 
 // layout(set=0,binding=1)uniform UniformBufferObject{
     //     vec2 window_size;
@@ -26,15 +27,24 @@ float sdfSphere(vec3 point,vec3 center,float radius){
 }
 
 float sdfBox(vec3 point,vec3 dim){
-    vec3 d = abs(point) - dim;
-    return min(max(d.x,max(d.y,d.z)),0.0)+length(max(d,0.0));
+    vec3 d=abs(point)-dim;
+    return min(max(d.x,max(d.y,d.z)),0.)+length(max(d,0.));
+}
+
+float sdfPlane(vec3 point,vec4 planeCoefficients){
+    return dot(point,planeCoefficients.xyz)+planeCoefficients.w;
 }
 
 float map(in vec3 p){
     float displacement=sin(5.*p.x)*cos(5.*p.y)*tan(5.*p.z)*.25;
     float sphere_0=sdfSphere(p,vec3(0.),1.);
-    float box_0=sdfBox(p,vec3(1.0,3.0,0.5));
-    return max(-sphere_0,box_0);
+    float box_0=sdfBox(p,vec3(1.,3.,.5));
+    vec3 point0=vec3(0.,-1.,0.);
+    vec3 point1=vec3(1.,-1.,-.5);
+    vec3 point2=vec3(-1.,-1.,-.5);
+    vec3 n=normalize(cross(point1-point0,point2-point0));
+    float plane_0=sdfPlane(p,vec4(n.x,n.y,n.z,-dot(n,point0)));
+    return min(plane_0,sphere_0);
 }
 
 vec3 calculateNormal(in vec3 p){
@@ -50,7 +60,7 @@ vec3 calculateNormal(in vec3 p){
 
 vec3 rayMarch(in vec3 rayOrigin,in vec3 rayDirection){
     float totalDistanceTraveled=0.;
-    const int NUMBER_OF_STEPS=32;
+    const int NUMBER_OF_STEPS=200;
     const float MINIUM_HIT_DISTANCE=.001;
     const float MAXIMUM_TRACE_DISTANCE=1000.;
     
@@ -69,6 +79,8 @@ vec3 rayMarch(in vec3 rayOrigin,in vec3 rayDirection){
             float diffuseIntensity=max(0.,dot(normal,directionToLight));
             
             return vec3(1.,0.,0.)*diffuseIntensity;
+            
+            // return vec3(totalDistanceTraveled/7);
         }
         if(totalDistanceTraveled>MAXIMUM_TRACE_DISTANCE){
             break;
@@ -76,7 +88,7 @@ vec3 rayMarch(in vec3 rayOrigin,in vec3 rayDirection){
         
         totalDistanceTraveled+=distanceToClosest;
     }
-    return vec3(0.);
+    return vec3(0.0,0.0,0.1);
 }
 
 void main(){
@@ -84,9 +96,9 @@ void main(){
     vec2 uv=(gl_FragCoord.xy/min(dimensions.x,dimensions.y))*2.-1.;
     uv.y=-uv.y;
     
-    vec3 cameraPosition=vec3(0.,-0.,-5.);
+    vec3 cameraPosition=camera_coordinates;
     vec3 rayOrigin=cameraPosition;
-    vec3 rayDirection=vec3(uv,1.);
+    vec3 rayDirection=normalize(camera_rotation*vec3(uv,sqrt(3)));
     
     vec3 shadedColor=rayMarch(rayOrigin,rayDirection);
     

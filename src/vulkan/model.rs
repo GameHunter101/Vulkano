@@ -284,7 +284,6 @@ impl InstanceData {
 
     pub fn screen_quad(
         view_matrix: na::Matrix4<f32>,
-        projection_matrix: na::Matrix4<f32>,
     ) -> InstanceData {
         InstanceData {
             model_matrix: na::Matrix4::identity().into(),
