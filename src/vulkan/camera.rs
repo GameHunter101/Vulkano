@@ -20,11 +20,7 @@ impl Default for Camera {
             position: na::Vector3::new(0.0, 0.0, -5.0),
             down_direction: na::Unit::new_normalize(na::Vector3::new(0.0, 0.0, -1.0)),
             left_direction: na::Unit::new_normalize(na::Vector3::new(1.0, 0.0, 0.0)),
-            rotation_matrix: na::Matrix3::from_columns(&[
-                na::Vector3::new(-1.0, 0.0, 0.0),
-                na::Vector3::new(0.0, -1.0, 0.0),
-                na::Vector3::new(0.0, 0.0, 1.0),
-            ]),
+            rotation_matrix: na::Matrix3::identity(),
             pitch: 0.0,
             yaw: 0.0,
         };
