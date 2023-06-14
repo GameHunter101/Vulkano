@@ -1,5 +1,13 @@
 #![allow(unused)]
 
+use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
+};
+use std::thread;
+use std::time::{Duration, Instant};
+
 use ash::vk;
 use nalgebra as na;
 use winit::{dpi::PhysicalSize, window::WindowBuilder};
@@ -45,106 +53,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut vulkano = Vulkano::init(&window)?;
 
-    let mut camera = Camera::default();
-
-    /* let mut texture_id = vulkano.new_texture_from_file("./gfx/dude.png")?;
-
-    let mut second_texture_id = vulkano.new_texture_from_file("./gfx/xdd.png")?;
-
-    let third_texture_id = vulkano.new_texture_from_file("./gfx/newLogo.png")?; */
-
-    /* let letters = vulkano.text.create_letters(
-        &[&fontdue::layout::TextStyle::new("Hello world!", 35.0, 0)],
-        [0., 1., 0.],
-    );
-    vulkano.text.create_vertex_data(
-        letters,
-        (100, 200),
-        &window,
-        &vulkano.instance,
-        &vulkano.device,
-        vulkano.physical_device,
-        &mut vulkano.allocator,
-        vulkano.pools.command_pool_graphics,
-        vulkano.queues.graphics_queue,
-        &vulkano.swapchain,
-        &vulkano.renderpass,
-    );
-    vulkano
-        .text
-        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator); */
-    /* let letters2 = vulkano.text.create_letters(
-        &fontdue::layout::TextStyle::new("(and smaller)", 8.0, 0),
-        [0.6, 0.6, 0.6],
-    );
-    vulkano.text.create_vertex_data(
-        letters2,
-        (100, 400),
-        &window,
-        &vulkano.instance,
-        &vulkano.device,
-        vulkano.physical_device,
-        &mut vulkano.allocator,
-        vulkano.pools.command_pool_graphics,
-        vulkano.queues.graphics_queue,
-        &vulkano.swapchain,
-    );
-    vulkano
-        .text
-        .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator); */
-
-    // let mut quad = Model::quad();
+    let mut camera = Arc::new(Mutex::new(Camera::default()));
 
     let mut screen_quad = Model::screen_quad();
 
     let mut lights = LightManager::default();
 
-    lights.add_light(DirectionalLight {
-        direction: na::Vector3::new(-1., -1., 0.),
-        illuminance: [10.1, 10.1, 10.1],
-    });
-    lights.add_light(PointLight {
-        position: na::Point3::new(0.1, -3.0, -3.0),
-        luminous_flux: [100.0, 100.0, 100.0],
-    });
-    lights.add_light(PointLight {
-        position: na::Point3::new(0.1, -3.0, -3.0),
-        luminous_flux: [100.0, 100.0, 100.0],
-    });
-    lights.add_light(PointLight {
-        position: na::Point3::new(0.1, -3.0, -3.0),
-        luminous_flux: [100.0, 100.0, 100.0],
-    });
-
-    screen_quad.insert_visibly(InstanceData::screen_quad(camera.view_matrix));
-
-    /* quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
-        na::Matrix4::new_translation(&na::Vector3::new(0.0, 0.0, 0.0)),
-        texture_id,
+    screen_quad.insert_visibly(InstanceData::screen_quad(
+        camera.lock().unwrap().view_matrix,
     ));
-
-    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
-        na::Matrix4::new_translation(&na::Vector3::new(2.0, 0.0, 0.3)),
-        second_texture_id,
-    ));
-
-    quad.insert_visibly(TexturedInstanceData::from_matrix_and_texture(
-        na::Matrix4::new_translation(&na::Vector3::new(-0.5, 0.0, -0.3)),
-        third_texture_id,
-    )); */
 
     lights.update_buffer(
         &vulkano.device,
         &mut vulkano.light_buffer,
         &mut vulkano.lights_descriptor_sets,
     );
-
-    /* quad.update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
-        .unwrap();
-    quad.update_index_buffer(&vulkano.device, &mut vulkano.allocator)
-        .unwrap();
-    quad.update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
-        .unwrap(); */
 
     screen_quad
         .update_vertex_buffer(&vulkano.device, &mut vulkano.allocator)
@@ -156,12 +79,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .update_instance_buffer(&vulkano.device, &mut vulkano.allocator)
         .unwrap();
 
-    // let test: Vec<ModelTypes> = vec![ModelTypes::Textured(quad)];
-
     vulkano.models = vec![];
     vulkano.screen_quad = Some(screen_quad);
 
     let mut mouse_pos: Option<winit::dpi::PhysicalPosition<f64>> = None;
+    let mut thread_handle: Option<thread::JoinHandle<()>> = None;
+    let mut key_pressed: Option<winit::event::VirtualKeyCode> = None;
+    // let (tx, rx) = mpsc::channel::<Option<()>>();
+    // let rx = Arc::new(Mutex::new(rx));
+    let mut map =
+        HashMap::<winit::event::VirtualKeyCode, (thread::JoinHandle<()>, Arc<AtomicBool>)>::new();
 
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
@@ -183,51 +110,110 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..
         } => {
             if let Some(mouse_pos) = mouse_pos {
-                camera.update_rotation([position.x - mouse_pos.x, mouse_pos.y - position.y]);
+                camera
+                    .lock()
+                    .unwrap()
+                    .update_rotation([position.x - mouse_pos.x, mouse_pos.y - position.y]);
             }
             mouse_pos = Some(position);
         }
 
         Event::WindowEvent {
-            event: WindowEvent::KeyboardInput { input, .. },
+            event:
+                WindowEvent::KeyboardInput {
+                    input:
+                        winit::event::KeyboardInput {
+                            state: key_state,
+                            virtual_keycode: Some(virtual_keycode),
+                            ..
+                        },
+                    ..
+                },
             ..
-        } => {
-            if let winit::event::KeyboardInput {
-                state: winit::event::ElementState::Pressed,
-                virtual_keycode: Some(keycode),
-                ..
-            } = input
-            {
-                let distance = 0.1;
-                match keycode {
-                    winit::event::VirtualKeyCode::W => {
-                        camera.move_forward(distance);
-                    }
-                    winit::event::VirtualKeyCode::S => {
-                        camera.move_backward(distance);
-                    }
-                    winit::event::VirtualKeyCode::A => {
-                        camera.move_left(distance);
-                    }
-                    winit::event::VirtualKeyCode::D => {
-                        camera.move_right(distance);
-                    }
-                    winit::event::VirtualKeyCode::F11 => {
-                        screenshot(&vulkano).expect("Trouble taking screenshot");
-                    }
-                    winit::event::VirtualKeyCode::Escape => {
-                        window.set_cursor_visible(true);
-                        window.set_cursor_grab(winit::window::CursorGrabMode::None);
-                    }
-                    _ => {}
+        } => match key_state {
+            winit::event::ElementState::Pressed => {
+                if !map.contains_key(&virtual_keycode) {
+                    let flag = Arc::new(AtomicBool::new(true));
+                    let flag_clone = flag.clone();
+                    let distance = 0.005;
+                    let camera_clone = Arc::clone(&camera);
+                    let handle = thread::spawn(move || {
+                        let mut last_frame_time = Instant::now();
+                        loop {
+                            if !flag_clone.load(Ordering::SeqCst) {
+                                break;
+                            }
+
+                            let elapsed = last_frame_time.elapsed();
+                            last_frame_time = Instant::now();
+                            let frame_duration = elapsed.as_millis() as f32;
+
+                            match virtual_keycode {
+                                winit::event::VirtualKeyCode::W => {
+                                    camera_clone.lock().unwrap().move_forward(distance * frame_duration);
+                                }
+                                winit::event::VirtualKeyCode::S => {
+                                    camera_clone.lock().unwrap().move_backward(distance * frame_duration);
+                                }
+                                winit::event::VirtualKeyCode::A => {
+                                    camera_clone.lock().unwrap().move_left(distance * frame_duration);
+                                }
+                                winit::event::VirtualKeyCode::D => {
+                                    camera_clone.lock().unwrap().move_right(distance * frame_duration);
+                                }
+                                winit::event::VirtualKeyCode::Space => {
+                                    camera_clone.lock().unwrap().move_up(distance * frame_duration);
+                                }
+                                winit::event::VirtualKeyCode::LControl => {
+                                    camera_clone.lock().unwrap().move_down(distance * frame_duration);
+                                }
+                                _ => {}
+                            };
+                            thread::sleep(Duration::from_micros(10));
+                        }
+                    });
+                    map.insert(virtual_keycode, (handle, flag));
                 }
             }
-        }
-
+            winit::event::ElementState::Released => {
+                if let Some((handle, flag)) = map.remove(&virtual_keycode) {
+                    flag.store(false, Ordering::SeqCst);
+                    // thread::spawn(move || {
+                    handle.join().expect("Failed to join thread");
+                    // });
+                }
+            }
+        },
+        /* let distance = 0.1;
+        match keycode {
+            winit::event::VirtualKeyCode::W => {
+                camera.move_forward(distance);
+            }
+            winit::event::VirtualKeyCode::S => {
+                camera.move_backward(distance);
+            }
+            winit::event::VirtualKeyCode::A => {
+                camera.move_left(distance);
+            }
+            winit::event::VirtualKeyCode::D => {
+                camera.move_right(distance);
+            }
+            winit::event::VirtualKeyCode::F11 => {
+                screenshot(&vulkano).expect("Trouble taking screenshot");
+            }
+            winit::event::VirtualKeyCode::Escape => {
+                window.set_cursor_visible(true);
+                window.set_cursor_grab(winit::window::CursorGrabMode::None);
+            }
+            _ => {}
+        } */
         Event::WindowEvent {
             event: WindowEvent::CloseRequested,
             ..
         } => {
+            if let Some(handle) = thread_handle.take() {
+                handle.join().unwrap();
+            }
             *control_flow = winit::event_loop::ControlFlow::Exit;
         }
         Event::RedrawRequested(_) => {
@@ -258,7 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vulkano.swapchain.may_begin_drawing[vulkano.swapchain.current_image]
                     ])
                     .expect("Resetting fences");
-                camera.update_buffer(
+                camera.lock().unwrap().update_buffer(
                     &mut vulkano.uniform_buffer,
                     vulkano.swapchain.extent.width,
                     vulkano.swapchain.extent.height,
@@ -328,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(..) => {}
                     Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                         vulkano.recreate_swapchain().expect("Swapchain recreation");
-                        camera.update_buffer(
+                        camera.lock().unwrap().update_buffer(
                             &mut vulkano.uniform_buffer,
                             vulkano.swapchain.extent.width,
                             vulkano.swapchain.extent.height,

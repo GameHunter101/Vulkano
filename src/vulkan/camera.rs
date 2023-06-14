@@ -130,6 +130,15 @@ impl Camera {
         self.move_left(-distance);
     }
 
+    pub fn move_up(&mut self, distance: f32) {
+        self.position += na::Vector3::new(0.0, distance, 0.0);
+        self.update_view_matrix();
+    }
+
+    pub fn move_down(&mut self, distance: f32) {
+        self.move_up(-distance);
+    }
+
     pub fn turn_right(&mut self, angle: f32) {
         // let rotation = na::Rotation3::from_axis_angle(&self.down_direction, angle);
         let rotation_matrix = na::Matrix3::new(
