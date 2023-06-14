@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !map.contains_key(&virtual_keycode) {
                     let flag = Arc::new(AtomicBool::new(true));
                     let flag_clone = flag.clone();
-                    let distance = 0.005;
+                    let mut distance = 0.005;
                     let camera_clone = Arc::clone(&camera);
                     let handle = thread::spawn(move || {
                         let mut last_frame_time = Instant::now();
