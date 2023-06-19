@@ -19,7 +19,7 @@ const uint MAXIMUM_OBJECTS_COUNT=100;
 const float FOV=60*PI/180;
 const float PHI=1.61803398874989484820459;
 const int MAXIMUM_LIGHT_BOUNCES=2;
-const bool global_illumination=true;
+const bool global_illumination=false;
 
 // layout(set=0,binding=1)uniform UniformBufferObject{
     //     vec2 window_size;
