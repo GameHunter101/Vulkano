@@ -1,5 +1,7 @@
 #version 450
-#extension GL_EXT_debug_printf:enable
+#pragma shader_stage(fragment)
+#pragma spirv(ShaderClockKHR)
+// #extension GL_EXT_debug_printf:enable
 #extension GL_ARB_shader_clock:enable
 
 layout(location=0)out vec4 outColor;
@@ -317,17 +319,4 @@ void main(){
     
     outColor=vec4(shadedColor,1.);
     
-    // outColor=vec4(uv.x,uv.y,0.,1.);
-    // debugPrintfEXT("time: %u",clockARB());
-    
-    /* vec2 pixelCoord=gl_FragCoord.xy*dimensions;
-    int pixelIndex=int(pixelCoord.y*dimensions.x+pixelCoord.x);
-    debugPrintfEXT("index:%i",pixelIndex);
-    
-    int randomState=pixelIndex;
-    
-    float r=randomValue(randomState);
-    float g=randomValue(randomState);
-    float b=randomValue(randomState);
-    theColor=vec4(r,g,b,1); */
 }

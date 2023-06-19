@@ -85,6 +85,7 @@ pub fn init_instance(entry: &Entry, layer_names: &[&str]) -> Result<Instance, vk
         ash::extensions::ext::DebugUtils::name().as_ptr(),
         ash::extensions::khr::Surface::name().as_ptr(),
         ash::extensions::khr::Win32Surface::name().as_ptr(),
+        // vk::KhrShaderClockFn::name().as_ptr(),
     ];
     let mut debug_create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
         .message_severity(
@@ -95,7 +96,7 @@ pub fn init_instance(entry: &Entry, layer_names: &[&str]) -> Result<Instance, vk
         )
         .message_type(
             // vk::DebugUtilsMessageTypeFlagsEXT::GENERAL |
-            vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE| {
+            vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE | {
                 vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
             },
         )
@@ -163,6 +164,11 @@ pub fn init_device_and_queues(
             .build(),
     ];
     let features = vk::PhysicalDeviceFeatures::builder().fill_mode_non_solid(true);
+    let mut clock_features =
+        vk::PhysicalDeviceShaderClockFeaturesKHR::builder().shader_subgroup_clock(true);
+
+    let mut sm_builtins_features =
+        vk::PhysicalDeviceShaderSMBuiltinsFeaturesNV::builder().shader_sm_builtins(true);
 
     let device_extension_name_pointers: Vec<*const i8> = vec![
         ash::extensions::khr::Swapchain::name().as_ptr(),
@@ -180,6 +186,8 @@ pub fn init_device_and_queues(
         .enabled_extension_names(&device_extension_name_pointers)
         .enabled_layer_names(&layer_name_pointers)
         .enabled_features(&features)
+        .push_next(&mut sm_builtins_features)
+        .push_next(&mut clock_features)
         .push_next(&mut indexing_features);
     let logical_device =
         unsafe { instance.create_device(physical_device, &device_create_info, None)? };
