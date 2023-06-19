@@ -15,6 +15,9 @@ const float MAXIMUM_TRACE_DISTANCE=1000.;
 const float PI=3.141592;
 const uint MAXIMUM_OBJECTS_COUNT=100;
 const float FOV=60*PI/180;
+const float PHI=1.61803398874989484820459;
+const int MAXIMUM_LIGHT_BOUNCES=2;
+const bool global_illumination=true;
 
 // layout(set=0,binding=1)uniform UniformBufferObject{
     //     vec2 window_size;
@@ -30,19 +33,21 @@ struct Surface{
     vec3 color;
 };
 
-float randomValue(inout int state){
-    state=state*747796405+2891336453;
-    int result=((state>>((state>>28)+4))^state)*277803737;
-    return result/4294967295.;// (2^32 - 1)
+LightData light=LightData(vec3(2.,1.,3.),vec3(1.));
+LightData light2=LightData(vec3(-2.,1.,-3.),vec3(.7f,.14f,.42f));
+
+float randomValue(in vec2 xy,in float seed){
+    return fract(tan(distance(xy*PHI,xy)*seed)*xy.x);
 }
 
 Surface sdfSphere(vec3 point,vec3 center,float radius,vec3 color){
     return Surface(length(point-center)-radius,color);
 }
 
-float sdfBox(vec3 point,vec3 dim){
+Surface sdfBox(vec3 point,vec3 dim,vec3 color){
     vec3 d=abs(point)-dim;
-    return min(max(d.x,max(d.y,d.z)),0.)+length(max(d,0.));
+    float signedDistance=min(max(d.x,max(d.y,d.z)),0.)+length(max(d,0.));
+    return Surface(signedDistance,color);
 }
 
 Surface sdfPlane(vec3 point,vec4 planeCoefficients,vec3 color){
@@ -91,10 +96,25 @@ vec4 betterMin(Surface sdfArray[MAXIMUM_OBJECTS_COUNT],uint len){
     return vec4(color,min);
 }
 
+Surface objectIntersect(Surface a, Surface b) {
+    float intersect = a.signedDistance;
+    vec3 color = a.color;
+    if (b.signedDistance > a.signedDistance) {
+        intersect = b.signedDistance;
+        color = b.color;
+    }
+    return Surface(intersect, color);
+}
+
+Surface objectDifference(Surface a,Surface b){
+    float difference = objectIntersect(a,Surface(-b.signedDistance,b.color)).signedDistance;
+    return Surface(difference,a.color);
+}
+
 vec4 map(in vec3 p){
     Surface sphere_0=sdfSphere(p,vec3(0.),1.,vec3(0,1,0));
     Surface sphere_1=sdfSphere(p,vec3(2.,0.,3.),.8,vec3(.8706,.4078,.9137));
-    float box_0=sdfBox(p,vec3(1.,3.,.5));
+    Surface box_0=sdfBox(p,vec3(1.,3.,.5),vec3(.71f,.16f,.25f));
     vec3 point0=vec3(0.,-1.,0.);
     vec3 point1=vec3(1.,-1.,-.5);
     vec3 point2=vec3(-1.,-1.,-.5);
@@ -106,11 +126,13 @@ vec4 map(in vec3 p){
     Surface sdfs[MAXIMUM_OBJECTS_COUNT];
     
     sdfs[0]=plane_0;
-    sdfs[1]=sphere_0;
+    sdfs[1]=objectDifference(box_0,sphere_0);
+    sdfs[2]=sphere_1;
+    // sdfs[3] = box_0;
     // sdfs[1] = mandelbulb;
     
     // return min(min(plane_0,max(-sphere_0,box_0)),sphere_1);
-    return betterMin(sdfs,2);
+    return betterMin(sdfs,3);
 }
 
 vec3 calculateNormal(in vec3 p){
@@ -164,7 +186,7 @@ float lightMarch(in vec3 rayOrigin,in vec3 lightPos){
     return minAngle;
 }
 
-vec3 calculateLight(in vec3 rayOrigin,in vec3 normal,in LightData light){
+vec3 calculateLight(vec3 rayOrigin,vec3 normal,LightData light){
     
     float minAngle=lightMarch(rayOrigin+normal*MINIUM_HIT_DISTANCE*10,light.position);
     vec3 directionToLight=normalize(light.position-rayOrigin);
@@ -177,7 +199,57 @@ vec3 lerp(vec3 a,vec3 b,float t){
     return(1-t)*a+t*b;
 }
 
-vec3 rayMarch(in vec3 rayOrigin,in vec3 rayDirection){
+vec3 globalIllumination(vec3 rayOrigin,vec3 bounceNormal,vec3 originalDirection,float roughness){
+    vec3 accumulatedColor=vec3(1.);
+    
+    vec3 bounceOrigin=rayOrigin;
+    
+    for(int i=0;i<MAXIMUM_LIGHT_BOUNCES;i++){
+        vec2 pixelCoord=gl_FragCoord.xy*dimensions;
+        int pixelIndex=int(pixelCoord.y*dimensions.x+pixelCoord.x);
+        
+        float seed=fract(float(clockARB()/1000000000));
+        float rand1=randomValue(gl_FragCoord.xy,seed+mod(float(clockARB())/1000000000,20));
+        float rand2=randomValue(gl_FragCoord.xy,rand1);
+        float azimuthalAngle=rand1*2*PI;
+        float polarAngle=acos(2*rand2-1);
+        vec3 diffuseDirection=vec3(sin(polarAngle)*cos(azimuthalAngle),sin(polarAngle)*sin(azimuthalAngle),cos(polarAngle));
+        vec3 smoothDirection=originalDirection-2.*dot(originalDirection,bounceNormal)*bounceNormal;
+        float isAligned=sign(dot(diffuseDirection,bounceNormal));
+        diffuseDirection*=isAligned;
+        vec3 rayDirecton=lerp(diffuseDirection,smoothDirection,max(roughness,.005));
+        
+        float totalDistanceTraveled=0.;
+        
+        for(int i=0;i<NUMBER_OF_STEPS/10;i++){
+            vec3 currentPosition=bounceOrigin+totalDistanceTraveled*rayDirecton+rayDirecton*.5;
+            vec4 mapResult=map(currentPosition);
+            float distanceToClosest=mapResult.w;
+            vec3 colorOfClosest=vec3(mapResult);
+            
+            if(distanceToClosest<MINIUM_HIT_DISTANCE){
+                vec3 normal=calculateNormal(currentPosition);
+                vec3 lightAccumulated=colorOfClosest+calculateLight(currentPosition,normal,light)+calculateLight(currentPosition,normal,light2);
+                vec3 color=lightAccumulated;
+                accumulatedColor*=color;
+                // accumulatedColor=vec3(1.);
+                bounceOrigin=currentPosition;
+                // break;
+            }
+            
+            if(totalDistanceTraveled>MAXIMUM_TRACE_DISTANCE/20){
+                accumulatedColor=vec3(0.);
+                break;
+            }
+            
+            totalDistanceTraveled+=distanceToClosest;
+        }
+        
+    }
+    return accumulatedColor;
+}
+
+vec3 rayMarch(vec3 rayOrigin,vec3 rayDirection){
     float totalDistanceTraveled=0.;
     float anglePerPixel=FOV/dimensions.y;
     vec3 color=vec3(0.,0.,0.);
@@ -198,23 +270,19 @@ vec3 rayMarch(in vec3 rayOrigin,in vec3 rayDirection){
         
         // Accumulate light and color data
         if(tracePrev2>tracePrev1&&tracePrev1<currentTraceAngle&&currentTraceAngle<anglePerPixel||distanceToClosest<MINIUM_HIT_DISTANCE){
-            if (distanceToClosest<MINIUM_HIT_DISTANCE) {
-                blendingCoefficient = 1-alpha;
+            if(distanceToClosest<MINIUM_HIT_DISTANCE){
+                blendingCoefficient=1-alpha;
             }
             vec3 normal=calculateNormal(currentPosition);
             
-            vec3 lightPosition=vec3(2.,1.,3.);
-            
-            // vec3 directionToLight=normalize(lightPosition-currentPosition);
-            
-            // float ambientOcclusion=1-float(i)/(NUMBER_OF_STEPS-1);
-            
-            LightData light=LightData(vec3(2.,1.,3.),vec3(1.));
-            LightData light2=LightData(vec3(-2.,1.,-3.),vec3(.77f,.69f,.58f));
-            
             vec3 lightAccumulated=colorOfClosest+calculateLight(currentPosition,normal,light)+calculateLight(currentPosition,normal,light2);
             
-            color=lerp(color,lightAccumulated*calculateAmbientOcclusion(currentPosition,normal),blendingCoefficient);
+            if(global_illumination){
+                lightAccumulated+=globalIllumination(currentPosition,normal,rayDirection,0.7);
+            }
+            
+            // color=globalIllumination(currentPosition,normal,rayDirection,0.);
+            color=lerp(color,(lightAccumulated)*calculateAmbientOcclusion(currentPosition,normal),blendingCoefficient);
             alpha+=blendingCoefficient;
         }
         
@@ -248,6 +316,7 @@ void main(){
     vec3 shadedColor=rayMarch(rayOrigin,rayDirection);
     
     outColor=vec4(shadedColor,1.);
+    
     // outColor=vec4(uv.x,uv.y,0.,1.);
     // debugPrintfEXT("time: %u",clockARB());
     

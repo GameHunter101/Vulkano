@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use ash::vk;
 use nalgebra as na;
+use winit::event::VirtualKeyCode;
 use winit::{dpi::PhysicalSize, window::WindowBuilder};
 
 mod vulkan {
@@ -84,11 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut mouse_pos: Option<winit::dpi::PhysicalPosition<f64>> = None;
     let mut thread_handle: Option<thread::JoinHandle<()>> = None;
-    let mut key_pressed: Option<winit::event::VirtualKeyCode> = None;
+    let mut key_pressed: Option<VirtualKeyCode> = None;
     // let (tx, rx) = mpsc::channel::<Option<()>>();
     // let rx = Arc::new(Mutex::new(rx));
-    let mut map =
-        HashMap::<winit::event::VirtualKeyCode, (thread::JoinHandle<()>, Arc<AtomicBool>)>::new();
+    let mut map = HashMap::<VirtualKeyCode, (thread::JoinHandle<()>, Arc<AtomicBool>)>::new();
 
     use winit::event::{Event, WindowEvent};
     event_loop.run(move |event, _, control_flow| match event {
@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..
         } => match key_state {
             winit::event::ElementState::Pressed => {
-                if !map.contains_key(&virtual_keycode) {
+                if !map.contains_key(&virtual_keycode) && virtual_keycode != VirtualKeyCode::F11 {
                     let flag = Arc::new(AtomicBool::new(true));
                     let flag_clone = flag.clone();
                     let mut distance = 0.005;
@@ -149,23 +149,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let frame_duration = elapsed.as_millis() as f32;
 
                             match virtual_keycode {
-                                winit::event::VirtualKeyCode::W => {
-                                    camera_clone.lock().unwrap().move_forward(distance * frame_duration);
+                                VirtualKeyCode::W => {
+                                    camera_clone
+                                        .lock()
+                                        .unwrap()
+                                        .move_forward(distance * frame_duration);
                                 }
-                                winit::event::VirtualKeyCode::S => {
-                                    camera_clone.lock().unwrap().move_backward(distance * frame_duration);
+                                VirtualKeyCode::S => {
+                                    camera_clone
+                                        .lock()
+                                        .unwrap()
+                                        .move_backward(distance * frame_duration);
                                 }
-                                winit::event::VirtualKeyCode::A => {
-                                    camera_clone.lock().unwrap().move_left(distance * frame_duration);
+                                VirtualKeyCode::A => {
+                                    camera_clone
+                                        .lock()
+                                        .unwrap()
+                                        .move_left(distance * frame_duration);
                                 }
-                                winit::event::VirtualKeyCode::D => {
-                                    camera_clone.lock().unwrap().move_right(distance * frame_duration);
+                                VirtualKeyCode::D => {
+                                    camera_clone
+                                        .lock()
+                                        .unwrap()
+                                        .move_right(distance * frame_duration);
                                 }
-                                winit::event::VirtualKeyCode::Space => {
-                                    camera_clone.lock().unwrap().move_up(distance * frame_duration);
+                                VirtualKeyCode::Space => {
+                                    camera_clone
+                                        .lock()
+                                        .unwrap()
+                                        .move_up(distance * frame_duration);
                                 }
-                                winit::event::VirtualKeyCode::LControl => {
-                                    camera_clone.lock().unwrap().move_down(distance * frame_duration);
+                                VirtualKeyCode::LControl => {
+                                    camera_clone
+                                        .lock()
+                                        .unwrap()
+                                        .move_down(distance * frame_duration);
                                 }
                                 _ => {}
                             };
@@ -173,6 +191,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                     map.insert(virtual_keycode, (handle, flag));
+                }
+                if virtual_keycode == VirtualKeyCode::F11 {
+                    screenshot(&vulkano).expect("Trouble taking screenshot");
                 }
             }
             winit::event::ElementState::Released => {
@@ -184,6 +205,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
+
+        /* Event::WindowEvent {
+            event: WindowEvent::KeyboardInput { input, .. },
+            ..
+        } => {
+            if let winit::event::KeyboardInput {
+                state: winit::event::ElementState::Pressed,
+                virtual_keycode: Some(keycode),
+                ..
+            } = input
+            {
+                match keycode {
+                    winit::event::VirtualKeyCode::F11 => {
+                        screenshot(&vulkano).expect("Trouble taking screenshot");
+                    }
+                    _ => {}
+                }
+            }
+        } */
+
         /* let distance = 0.1;
         match keycode {
             winit::event::VirtualKeyCode::W => {
